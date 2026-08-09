@@ -8,11 +8,24 @@ function Fail([string]$Message) {
     throw "NOX install error: $Message"
 }
 
-$arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-switch ($arch) {
-    "X64"   { $Asset = "nox-windows-x64.exe" }
-    "Arm64" { $Asset = "nox-windows-arm64.exe" }
-    default { Fail "unsupported Windows architecture: $arch" }
+$arch = $env:PROCESSOR_ARCHITECTURE
+
+if ([string]::IsNullOrWhiteSpace($arch)) {
+    $arch = $env:PROCESSOR_ARCHITEW6432
+}
+
+switch ($arch.ToUpperInvariant()) {
+    "AMD64" {
+        $Asset = "nox-windows-x64.exe"
+    }
+
+    "ARM64" {
+        $Asset = "nox-windows-arm64.exe"
+    }
+
+    default {
+        Fail "unsupported Windows architecture: $arch"
+    }
 }
 
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("nox-install-" + [Guid]::NewGuid().ToString("N"))
