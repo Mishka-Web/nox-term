@@ -64,7 +64,7 @@ fn install_destination() -> Result<PathBuf> {
     #[cfg(windows)]
     {
         let local = env::var_os("LOCALAPPDATA").context("LOCALAPPDATA не определён")?;
-        return Ok(PathBuf::from(local).join("Programs").join("NOX").join("nox.exe"));
+        Ok(PathBuf::from(local).join("Programs").join("NOX").join("nox.exe"))
     }
 
     #[cfg(not(windows))]

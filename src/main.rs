@@ -55,6 +55,8 @@ const HR_MARKER: &str = "\u{001e}NOXHR";
 struct PageImage {
     alt: String,
     url: Url,
+    source_width: u32,
+    source_height: u32,
     pixel_width: u32,
     pixel_height: u32,
     rgb: Vec<u8>,
@@ -66,6 +68,8 @@ impl PageImage {
         Self {
             alt,
             url,
+            source_width: 0,
+            source_height: 0,
             pixel_width: 0,
             pixel_height: 0,
             rgb: Vec::new(),
@@ -76,6 +80,15 @@ impl PageImage {
     fn is_ready(&self) -> bool {
         self.pixel_width > 0 && self.pixel_height > 0 && !self.rgb.is_empty()
     }
+}
+
+#[derive(Debug)]
+struct DecodedImagePreview {
+    source_width: u32,
+    source_height: u32,
+    width: u32,
+    height: u32,
+    rgb: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +127,44 @@ struct PageForm {
     fields: Vec<FormField>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct TerminalLayout {
+    header: Vec<String>,
+    nav: Vec<String>,
+    main: Vec<String>,
+    aside: Vec<String>,
+    sections: Vec<LayoutRegion>,
+    cards: Vec<LayoutRegion>,
+    footer: Vec<String>,
+}
+
+impl TerminalLayout {
+    fn is_useful(&self) -> bool {
+        !self.header.is_empty()
+            || !self.nav.is_empty()
+            || !self.aside.is_empty()
+            || self.sections.len() >= 2
+            || self.cards.len() >= 2
+            || !self.footer.is_empty()
+    }
+
+    fn region_count(&self) -> usize {
+        (if self.header.is_empty() { 0 } else { 1 })
+            + (if self.nav.is_empty() { 0 } else { 1 })
+            + (if self.main.is_empty() { 0 } else { 1 })
+            + (if self.aside.is_empty() { 0 } else { 1 })
+            + self.sections.len()
+            + self.cards.len()
+            + (if self.footer.is_empty() { 0 } else { 1 })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LayoutRegion {
+    title: String,
+    lines: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 struct Page {
     title: String,
@@ -123,6 +174,7 @@ struct Page {
     links: Vec<LinkTarget>,
     forms: Vec<PageForm>,
     images: Vec<PageImage>,
+    layout: Option<TerminalLayout>,
     status_code: Option<u16>,
     raw_html: Option<String>,
     reader_mode: bool,
@@ -186,6 +238,7 @@ enum CommandAction {
     Forward,
     Reader,
     Visual,
+    Layout,
     Bookmarks,
     History,
     Forms,
@@ -214,6 +267,7 @@ const PALETTE_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand { name: "forward", description: "вперёд", action: CommandAction::Forward },
     PaletteCommand { name: "reader", description: "переключить Reader Mode", action: CommandAction::Reader },
     PaletteCommand { name: "visual", description: "переключить Visual Mode с изображениями", action: CommandAction::Visual },
+    PaletteCommand { name: "layout", description: "переключить Terminal Layout / Flow", action: CommandAction::Layout },
     PaletteCommand { name: "bookmarks", description: "открыть закладки", action: CommandAction::Bookmarks },
     PaletteCommand { name: "history", description: "открыть историю", action: CommandAction::History },
     PaletteCommand { name: "forms", description: "открыть формы страницы", action: CommandAction::Forms },
@@ -348,7 +402,7 @@ impl App {
 
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
+                    if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
                         self.handle_key(key);
                     }
                 }
@@ -385,6 +439,16 @@ impl App {
         tab.match_line = None;
         self.link_state.select(has_links.then_some(0));
         self.form_state.select(has_forms.then_some(0));
+    }
+
+    /// Return keyboard focus to the document after navigation or an overlay action.
+    /// Keeping this transition in one place prevents Address/Search/Hints state from
+    /// swallowing j/k and arrow keys after a page has already been opened.
+    fn focus_document(&mut self) {
+        self.mode = Mode::Normal;
+        self.input.clear();
+        self.input_cursor = 0;
+        self.hint_input.clear();
     }
 
     fn navigate_input(&mut self, raw: &str, push_history: bool) {
@@ -443,7 +507,7 @@ impl App {
             }
         }
 
-        self.mode = Mode::Normal;
+        self.focus_document();
         self.reset_view();
         self.status = match status_code {
             Some(code) => format!("HTTP {code} · {links} ссылок · {images} img · {forms} форм"),
@@ -616,6 +680,7 @@ impl App {
             CommandAction::Forward => self.go_forward(),
             CommandAction::Reader => self.toggle_reader_mode(),
             CommandAction::Visual => self.toggle_visual_mode(),
+            CommandAction::Layout => self.toggle_layout_mode(),
             CommandAction::Bookmarks => self.open_bookmarks(),
             CommandAction::History => self.open_history_panel(),
             CommandAction::Forms => self.open_forms(),
@@ -734,6 +799,18 @@ impl App {
             "Visual Mode включён · изображения и rich-content активны".to_string()
         } else {
             "Visual Mode выключен · компактный текстовый рендер".to_string()
+        };
+    }
+
+    fn toggle_layout_mode(&mut self) {
+        self.config.layout_mode = !self.config.layout_mode;
+        let enabled = self.config.layout_mode;
+        let _ = state::save_config(&self.paths, &self.config);
+        self.tab_mut().scroll = 0;
+        self.status = if enabled {
+            "Terminal Layout включён · NOX реконструирует структуру сайта".to_string()
+        } else {
+            "Terminal Layout выключен · линейный Flow renderer".to_string()
         };
     }
 
@@ -912,7 +989,7 @@ impl App {
             return;
         }
         self.tab_mut().search_query = query;
-        self.mode = Mode::Normal;
+        self.focus_document();
         self.find_next_from(0);
     }
 
@@ -1070,6 +1147,7 @@ impl App {
             KeyCode::Char('r') => self.reload(),
             KeyCode::Char('R') => self.toggle_reader_mode(),
             KeyCode::Char('V') => self.toggle_visual_mode(),
+            KeyCode::Char('L') => self.toggle_layout_mode(),
             KeyCode::Char('n') => self.find_next(),
             KeyCode::Char('N') => self.find_previous(),
             KeyCode::Char('m') => self.toggle_bookmark(),
@@ -1150,11 +1228,9 @@ impl App {
                     format!("Link hint: {}", self.hint_input)
                 };
             }
-            KeyCode::Char(c @ '0'..='9') => {
-                if self.hint_input.len() < 4 {
-                    self.hint_input.push(c);
-                    self.status = format!("Link hint: {} · Enter открыть", self.hint_input);
-                }
+            KeyCode::Char(c @ '0'..='9') if self.hint_input.len() < 4 => {
+                self.hint_input.push(c);
+                self.status = format!("Link hint: {} · Enter открыть", self.hint_input);
             }
             KeyCode::Char('q') if self.hint_input.is_empty() => self.running = false,
             _ => {}
@@ -1347,11 +1423,18 @@ impl App {
         let page = self.current_page();
         let ready_images = page.images.iter().filter(|image| image.is_ready()).count();
         let visual_chip = if self.config.visual_mode { " VISUAL " } else { " TEXT " };
+        let layout_chip = if self.config.layout_mode { " LAYOUT " } else { " FLOW " };
         let brand = Line::from(vec![
             Span::styled(" NOX ", Style::default().fg(BG).bg(ACCENT).add_modifier(Modifier::BOLD)),
             Span::styled(
                 visual_chip,
                 Style::default().fg(if self.config.visual_mode { Color::Rgb(167, 243, 208) } else { MUTED })
+                    .bg(SURFACE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                layout_chip,
+                Style::default().fg(if self.config.layout_mode { Color::Rgb(196, 181, 253) } else { MUTED })
                     .bg(SURFACE)
                     .add_modifier(Modifier::BOLD),
             ),
@@ -1431,16 +1514,43 @@ impl App {
         let match_line = self.tab().match_line;
         let visual = self.config.visual_mode;
         let content_width = self.viewport_width;
-        let mut rendered = render_document_lines(self.current_page(), content_width, visual, match_line);
+
+        // Keep the immutable page borrow inside this scope. We need to mutate
+        // self.rendered_height afterwards, so retaining `page` beyond the render
+        // step would trigger E0506 in Rust's borrow checker.
+        let (layout_active, reader_mode, status_code, mut rendered) = {
+            let page = self.current_page();
+            let layout_active = visual
+                && self.config.layout_mode
+                && match_line.is_none()
+                && page.layout.as_ref().is_some_and(TerminalLayout::is_useful);
+            let rendered = if layout_active {
+                render_terminal_layout(page, content_width)
+            } else {
+                render_document_lines(page, content_width, visual, match_line)
+            };
+            (layout_active, page.reader_mode, page.status_code, rendered)
+        };
+
         if rendered.is_empty() {
             rendered.push(Line::from(Span::styled("Пустая страница", Style::default().fg(MUTED))));
         }
-        self.rendered_height = rendered.len();
+        // Paragraph::wrap can turn one logical `Line` into several terminal rows.
+        // `rendered.len()` therefore under-counted long real-world pages and could
+        // make max_scroll() return 0 even while content visibly continued below
+        // the viewport. Measure the wrapped terminal-row height instead.
+        let paragraph_inner_width = area.width.saturating_sub(2).max(1);
+        self.rendered_height = wrapped_render_height(&rendered, paragraph_inner_width);
 
-        let page = self.current_page();
-        let mode = if page.reader_mode { "READER" } else { "DOCUMENT" };
-        let presentation = if visual { "VISUAL" } else { "TEXT" };
-        let title = match page.status_code {
+        let mode = if layout_active { "DOCUMENT" } else if reader_mode { "READER" } else { "DOCUMENT" };
+        let presentation = if layout_active {
+            "LAYOUT"
+        } else if visual {
+            "VISUAL"
+        } else {
+            "TEXT"
+        };
+        let title = match status_code {
             Some(code) => format!(" {mode} · {presentation} · HTTP {code} "),
             None => format!(" {mode} · {presentation} "),
         };
@@ -1514,7 +1624,7 @@ impl App {
             .collect();
         if filtered.is_empty() {
             self.command_state.select(None);
-        } else if self.command_state.selected().map_or(true, |index| index >= filtered.len()) {
+        } else if self.command_state.selected().is_none_or(|index| index >= filtered.len()) {
             self.command_state.select(Some(0));
         }
         let list = List::new(items)
@@ -1642,7 +1752,7 @@ impl App {
             (u32::from(self.tab().scroll) * 100 / u32::from(max_scroll)).min(100)
         };
         let hints = match self.mode {
-            Mode::Normal => format!("{progress:>3}% · V visual · s search · g hints · : commands · / find · ? help"),
+            Mode::Normal => format!("{progress:>3}% · L layout · V visual · s search · g hints · : commands · ? help"),
             Mode::Address => "Enter open · ? query · !gh/!w/!g/!ddg · Esc".to_string(),
             Mode::Search => "Enter find · n next · N previous · Esc".to_string(),
             Mode::Links => "j/k select · Enter open · t new tab · d download · Esc".to_string(),
@@ -1682,6 +1792,7 @@ impl App {
             help_row("b / f", "назад / вперёд"),
             help_row("r / R", "reload / Reader mode"),
             help_row("V", "Visual Mode: изображения + rich-content"),
+            help_row("L", "Terminal Layout: DOM → responsive terminal UI"),
             help_row("m / M", "bookmark / список закладок"),
             help_row("H", "общая история"),
             help_row("F", "формы текущей страницы"),
@@ -1690,7 +1801,7 @@ impl App {
             help_row("q / Ctrl+C", "выход"),
             Line::from(""),
             Line::from(Span::styled(
-                "NOX 0.6: Visual Mode, inline image previews, rich-content, omnibox и keyboard navigation.",
+                "NOX 0.7.4: semantic layout extraction + stable scrolling + compact adaptive images.",
                 Style::default().fg(MUTED),
             )),
             Line::from(Span::styled(
@@ -1698,12 +1809,12 @@ impl App {
                 Style::default().fg(MUTED),
             )),
             Line::from(Span::styled(
-                "JavaScript/CSS layout не исполняются — NOX остаётся быстрым terminal-first браузером.",
+                "CSS/JS не эмулируются 1:1: NOX реконструирует DOM-семантику и responsive layout под терминал.",
                 Style::default().fg(MUTED),
             )),
         ];
         frame.render_widget(
-            Paragraph::new(lines).style(Style::default().fg(TEXT).bg(PANEL)).block(modal_block(" NOX 0.6 · KEYBOARD ")),
+            Paragraph::new(lines).style(Style::default().fg(TEXT).bg(PANEL)).block(modal_block(" NOX 0.7 · KEYBOARD ")),
             modal,
         );
     }
@@ -1786,6 +1897,7 @@ fn response_to_page(
             links: Vec::new(),
             forms: Vec::new(),
             images: Vec::new(),
+            layout: None,
             status_code: Some(status),
             raw_html: None,
             reader_mode: false,
@@ -1841,6 +1953,7 @@ fn response_to_page(
             links: Vec::new(),
             forms: Vec::new(),
             images: Vec::new(),
+            layout: None,
             status_code: Some(status),
             raw_html: None,
             reader_mode: false,
@@ -1861,6 +1974,7 @@ fn response_to_page(
             links: Vec::new(),
             forms: Vec::new(),
             images: Vec::new(),
+            layout: None,
             status_code: Some(status),
             raw_html: None,
             reader_mode: false,
@@ -1960,6 +2074,11 @@ fn parse_html_page(
         lines.push(format!("### Forms: {} · press F", forms.len()));
     }
 
+    // Terminal Layout is built from the full DOM independently from Reader Mode.
+    // This lets L switch between semantic page composition and reading flow without
+    // refetching the document.
+    let layout = build_terminal_layout(&document, &url, max_images.min(24), &mut images);
+
     Page {
         title,
         display_url: url.as_str().to_string(),
@@ -1968,10 +2087,223 @@ fn parse_html_page(
         links,
         forms,
         images,
+        layout,
         status_code: Some(status),
         raw_html: Some(html.to_string()),
         reader_mode,
     }
+}
+
+
+fn build_terminal_layout(
+    document: &Html,
+    base: &Url,
+    max_images: usize,
+    images: &mut Vec<PageImage>,
+) -> Option<TerminalLayout> {
+    let body_selector = Selector::parse("body").expect("valid selector");
+    let header_selector = Selector::parse("header").expect("valid selector");
+    let nav_selector = Selector::parse("nav").expect("valid selector");
+    let main_selector = Selector::parse("main").expect("valid selector");
+    let aside_selector = Selector::parse("aside").expect("valid selector");
+    let footer_selector = Selector::parse("footer").expect("valid selector");
+    let section_selector = Selector::parse("main section, main article").expect("valid selector");
+    let fallback_section_selector = Selector::parse("section, article").expect("valid selector");
+    let card_selector = Selector::parse(
+        "main [class*='card'], main [class*='Card'], main [class*='feature'], main [class*='Feature'], main [class*='tile'], main [class*='Tile'], main [class*='grid'] > div, main [class*='Grid'] > div, main [class*='cards'] > div, main [class*='features'] > div, main [class*='row'] > div, main [class*='columns'] > div, main [style*='display:flex'] > div, main [style*='display: flex'] > div, main [style*='display:grid'] > div, main [style*='display: grid'] > div",
+    )
+    .expect("valid selector");
+
+    let body = document.select(&body_selector).next()?;
+    let mut layout = TerminalLayout::default();
+
+    if let Some(header) = document.select(&header_selector).next() {
+        layout.header = compact_region_lines(collect_layout_region_lines(header, base, max_images, images), 12);
+    }
+
+    if let Some(nav) = document.select(&nav_selector).next() {
+        layout.nav = collect_navigation_labels(nav, 18);
+    }
+
+    let main_element = document.select(&main_selector).next();
+    let has_main = main_element.is_some();
+    layout.main = if let Some(main) = main_element {
+        collect_layout_region_lines(main, base, max_images, images)
+    } else {
+        collect_layout_region_lines(body, base, max_images, images)
+    };
+
+    if let Some(aside) = document.select(&aside_selector).next() {
+        layout.aside = compact_region_lines(collect_layout_region_lines(aside, base, max_images, images), 28);
+        remove_duplicate_layout_lines(&mut layout.main, &layout.aside);
+    }
+
+    if let Some(footer) = document.select(&footer_selector).next() {
+        layout.footer = compact_region_lines(collect_layout_region_lines(footer, base, max_images, images), 14);
+    }
+
+    // If the document has no semantic <main>, body contains header/nav/footer too.
+    // Remove exact normalized duplicates so the terminal composition does not repeat them.
+    if !has_main {
+        remove_duplicate_layout_lines(&mut layout.main, &layout.header);
+        remove_duplicate_layout_lines(&mut layout.main, &layout.footer);
+    }
+
+    let section_iter: Vec<ElementRef<'_>> = if has_main {
+        document.select(&section_selector).take(24).collect()
+    } else {
+        document.select(&fallback_section_selector).take(24).collect()
+    };
+    let mut section_fingerprints = HashSet::new();
+    for section in section_iter {
+        let lines = compact_region_lines(collect_layout_region_lines(section, base, max_images, images), 80);
+        if lines.len() < 2 {
+            continue;
+        }
+        let fingerprint = layout_fingerprint(&lines);
+        // Semantic <section>/<article> blocks are often intentionally compact
+        // (for example a heading plus one short paragraph). Requiring a long
+        // fingerprint caused valid landing-page regions to disappear entirely.
+        if fingerprint.len() < 8 || !section_fingerprints.insert(fingerprint) {
+            continue;
+        }
+        let title = region_title(&lines).unwrap_or_else(|| "Section".to_string());
+        layout.sections.push(LayoutRegion { title, lines });
+    }
+
+    let mut card_fingerprints = HashSet::new();
+    for card in document.select(&card_selector).take(18) {
+        let lines = compact_region_lines(collect_layout_region_lines(card, base, max_images, images), 16);
+        let meaningful = lines.iter().filter(|line| !line.trim().is_empty()).count();
+        if !(2..=12).contains(&meaningful) {
+            continue;
+        }
+        let fingerprint = layout_fingerprint(&lines);
+        if fingerprint.len() < 20 || !card_fingerprints.insert(fingerprint) {
+            continue;
+        }
+        let title = region_title(&lines).unwrap_or_else(|| "Card".to_string());
+        layout.cards.push(LayoutRegion { title, lines });
+    }
+
+    // Prefer explicit component structure when it covers most of main content.
+    // This avoids printing the same landing-page features twice.
+    let main_chars = layout_text_weight(&layout.main).max(1);
+    let section_chars: usize = layout.sections.iter().map(|region| layout_text_weight(&region.lines)).sum();
+    let card_chars: usize = layout.cards.iter().map(|region| layout_text_weight(&region.lines)).sum();
+    if layout.cards.len() >= 2 && card_chars * 2 >= main_chars {
+        layout.main.clear();
+        layout.sections.clear();
+    } else if layout.sections.len() >= 2 && section_chars * 3 >= main_chars * 2 {
+        layout.main.clear();
+    }
+
+    if layout.is_useful() {
+        Some(layout)
+    } else {
+        None
+    }
+}
+
+fn collect_layout_region_lines(
+    element: ElementRef<'_>,
+    base: &Url,
+    max_images: usize,
+    images: &mut Vec<PageImage>,
+) -> Vec<String> {
+    let fallback_text = normalize_ws(&element.text().collect::<Vec<_>>().join(" "));
+    let lines = collect_content_lines(element, base, max_images, images);
+    if !lines.is_empty() {
+        return lines;
+    }
+    if fallback_text.is_empty() {
+        Vec::new()
+    } else {
+        vec![fallback_text]
+    }
+}
+
+fn collect_navigation_labels(nav: ElementRef<'_>, limit: usize) -> Vec<String> {
+    let link_selector = Selector::parse("a[href]").expect("valid selector");
+    let mut items = Vec::new();
+    let mut seen = HashSet::new();
+    for link in nav.select(&link_selector) {
+        let label = normalize_ws(&link.text().collect::<Vec<_>>().join(" "));
+        if label.is_empty() || label.chars().count() > 42 || !seen.insert(label.clone()) {
+            continue;
+        }
+        items.push(label);
+        if items.len() >= limit {
+            break;
+        }
+    }
+    items
+}
+
+fn compact_region_lines(mut lines: Vec<String>, max_lines: usize) -> Vec<String> {
+    while lines.first().is_some_and(|line| line.trim().is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    if lines.len() > max_lines {
+        lines.truncate(max_lines.saturating_sub(1));
+        lines.push("…".to_string());
+    }
+    lines
+}
+
+fn normalized_layout_line(line: &str) -> String {
+    line.trim()
+        .trim_start_matches('#')
+        .trim_start_matches('•')
+        .trim_start_matches('│')
+        .trim_start_matches('◇')
+        .trim()
+        .to_lowercase()
+}
+
+fn remove_duplicate_layout_lines(target: &mut Vec<String>, other: &[String]) {
+    let fingerprints: HashSet<String> = other
+        .iter()
+        .map(|line| normalized_layout_line(line))
+        .filter(|line| line.len() >= 4)
+        .collect();
+    target.retain(|line| {
+        let normalized = normalized_layout_line(line);
+        normalized.is_empty() || !fingerprints.contains(&normalized)
+    });
+}
+
+fn layout_fingerprint(lines: &[String]) -> String {
+    lines
+        .iter()
+        .filter(|line| !line.starts_with(IMAGE_MARKER_PREFIX))
+        .map(|line| normalized_layout_line(line))
+        .filter(|line| !line.is_empty())
+        .take(8)
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+fn layout_text_weight(lines: &[String]) -> usize {
+    lines
+        .iter()
+        .filter(|line| !line.starts_with(IMAGE_MARKER_PREFIX))
+        .map(|line| line.chars().count())
+        .sum()
+}
+
+fn region_title(lines: &[String]) -> Option<String> {
+    lines.iter().find_map(|line| {
+        line.strip_prefix("# ")
+            .or_else(|| line.strip_prefix("## "))
+            .or_else(|| line.strip_prefix("### "))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| truncate_layout_text(value, 46))
+    })
 }
 
 fn collect_content_lines(
@@ -2012,9 +2344,6 @@ fn collect_content_lines(
             continue;
         }
         if tag == "img" {
-            if images.len() >= max_images {
-                continue;
-            }
             let attrs = element.value();
             let mut source = attrs
                 .attr("data-src")
@@ -2047,6 +2376,9 @@ fn collect_content_lines(
             let index = if let Some(index) = images.iter().position(|image| image.url == target) {
                 index
             } else {
+                if images.len() >= max_images {
+                    continue;
+                }
                 let index = images.len();
                 images.push(PageImage::pending(alt.clone(), target));
                 index
@@ -2105,10 +2437,12 @@ fn hydrate_page_images(client: &Client, page: &mut Page, config: &AppConfig) {
     let referer = page.url.as_ref().map(|url| url.as_str().to_string());
     for image in &mut page.images {
         match download_page_image(client, image.url.clone(), referer.as_deref(), config) {
-            Ok((width, height, rgb)) => {
-                image.pixel_width = width;
-                image.pixel_height = height;
-                image.rgb = rgb;
+            Ok(preview) => {
+                image.source_width = preview.source_width;
+                image.source_height = preview.source_height;
+                image.pixel_width = preview.width;
+                image.pixel_height = preview.height;
+                image.rgb = preview.rgb;
                 image.error = None;
             }
             Err(err) => {
@@ -2123,7 +2457,7 @@ fn download_page_image(
     url: Url,
     referer: Option<&str>,
     config: &AppConfig,
-) -> Result<(u32, u32, Vec<u8>)> {
+) -> Result<DecodedImagePreview> {
     let mut request = client.get(url.clone()).timeout(Duration::from_secs(4));
     if let Some(referer) = referer {
         request = request.header(REFERER, referer);
@@ -2161,22 +2495,81 @@ fn download_page_image(
     decode_image_preview(&bytes, config)
 }
 
-fn decode_image_preview(bytes: &[u8], config: &AppConfig) -> Result<(u32, u32, Vec<u8>)> {
+fn decode_image_preview(bytes: &[u8], config: &AppConfig) -> Result<DecodedImagePreview> {
+    use image::imageops::FilterType;
+
     let decoded = image::load_from_memory(bytes).context("неподдерживаемый формат изображения")?;
-    let max_width = config.image_width.clamp(12, 80);
-    let thumbnail = decoded.thumbnail(max_width, max_width);
-    let width = thumbnail.width();
-    let height = thumbnail.height();
-    let rgba = thumbnail.to_rgba8();
-    let mut rgb = Vec::with_capacity((width * height * 3) as usize);
+    let source_width = decoded.width().max(1);
+    let source_height = decoded.height().max(1);
+
+    // NOX 0.6.1 keeps considerably more source detail than the original 48x48
+    // thumbnail pipeline. Width is the primary constraint; tall images may use
+    // up to four times that height while preserving their aspect ratio.
+    let max_width = config.image_width.clamp(24, 160);
+    let max_height = max_width.saturating_mul(4).clamp(96, 640);
+    let (target_width, target_height) = fit_image_dimensions(
+        source_width,
+        source_height,
+        max_width,
+        max_height,
+    );
+
+    let rgba = if target_width == source_width && target_height == source_height {
+        decoded.to_rgba8()
+    } else {
+        decoded
+            .resize_exact(target_width, target_height, FilterType::Lanczos3)
+            .to_rgba8()
+    };
+
+    let mut rgb = Vec::with_capacity((target_width * target_height * 3) as usize);
     for pixel in rgba.pixels() {
         let alpha = u16::from(pixel[3]);
         let inv = 255 - alpha;
+        // Composite transparency against the NOX image surface instead of
+        // throwing alpha away. This keeps logos/icons clean on dark terminals.
         rgb.push(((u16::from(pixel[0]) * alpha + 5 * inv) / 255) as u8);
         rgb.push(((u16::from(pixel[1]) * alpha + 8 * inv) / 255) as u8);
         rgb.push(((u16::from(pixel[2]) * alpha + 12 * inv) / 255) as u8);
     }
-    Ok((width, height, rgb))
+
+    Ok(DecodedImagePreview {
+        source_width,
+        source_height,
+        width: target_width,
+        height: target_height,
+        rgb,
+    })
+}
+
+fn fit_image_dimensions(
+    source_width: u32,
+    source_height: u32,
+    max_width: u32,
+    max_height: u32,
+) -> (u32, u32) {
+    let source_width = source_width.max(1);
+    let source_height = source_height.max(1);
+    let max_width = max_width.max(1);
+    let max_height = max_height.max(1);
+
+    if source_width <= max_width && source_height <= max_height {
+        return (source_width, source_height);
+    }
+
+    // Integer aspect-ratio fit avoids stretching and avoids overflowing u32
+    // for very large source images.
+    let width_limited_height = ((u64::from(source_height) * u64::from(max_width))
+        / u64::from(source_width))
+        .max(1) as u32;
+    if width_limited_height <= max_height {
+        return (max_width, width_limited_height.max(1));
+    }
+
+    let height_limited_width = ((u64::from(source_width) * u64::from(max_height))
+        / u64::from(source_height))
+        .max(1) as u32;
+    (height_limited_width.min(max_width).max(1), max_height)
 }
 
 fn response_declared_too_large(response: &Response, max_bytes: usize) -> bool {
@@ -2191,7 +2584,7 @@ fn response_declared_too_large(response: &Response, max_bytes: usize) -> bool {
 fn image_document_page(
     url: Url,
     status: u16,
-    preview: Option<(u32, u32, Vec<u8>)>,
+    preview: Option<DecodedImagePreview>,
     error: Option<String>,
 ) -> Page {
     let title = url
@@ -2201,10 +2594,12 @@ fn image_document_page(
         .unwrap_or("Image")
         .to_string();
     let mut image = PageImage::pending(title.clone(), url.clone());
-    if let Some((width, height, rgb)) = preview {
-        image.pixel_width = width;
-        image.pixel_height = height;
-        image.rgb = rgb;
+    if let Some(preview) = preview {
+        image.source_width = preview.source_width;
+        image.source_height = preview.source_height;
+        image.pixel_width = preview.width;
+        image.pixel_height = preview.height;
+        image.rgb = preview.rgb;
     }
     image.error = error;
     Page {
@@ -2215,6 +2610,7 @@ fn image_document_page(
         links: Vec::new(),
         forms: Vec::new(),
         images: vec![image],
+        layout: None,
         status_code: Some(status),
         raw_html: None,
         reader_mode: false,
@@ -2448,10 +2844,11 @@ fn home_page() -> Page {
         links: Vec::new(),
         forms: Vec::new(),
         images: Vec::new(),
+        layout: None,
         raw_html: None,
         reader_mode: true,
         lines: vec![
-            "# NOX 0.6".to_string(),
+            "# NOX 0.7".to_string(),
             String::new(),
             "Terminal-first web browser for navigation, reading and developer workflows.".to_string(),
             String::new(),
@@ -2462,6 +2859,7 @@ fn home_page() -> Page {
             "m / M — bookmark / bookmarks H — история".to_string(),
             "F — формы                    R — Reader mode".to_string(),
             "V — Visual Mode              true-color image previews".to_string(),
+            "L — Terminal Layout           header/nav/main/aside/cards/footer".to_string(),
             "? — все клавиши".to_string(),
             String::new(),
             "Search: обычный текст · ? forced search · !gh · !w · !g · !ddg".to_string(),
@@ -2480,6 +2878,7 @@ fn error_page(target: Url, err: &anyhow::Error) -> Page {
         links: Vec::new(),
         forms: Vec::new(),
         images: Vec::new(),
+        layout: None,
         raw_html: None,
         reader_mode: true,
         lines: vec![
@@ -2490,6 +2889,337 @@ fn error_page(target: Url, err: &anyhow::Error) -> Page {
             "Проверьте адрес, подключение или повторите клавишей r.".to_string(),
         ],
     }
+}
+
+
+fn render_terminal_layout(page: &Page, width: u16) -> Vec<Line<'static>> {
+    let Some(layout) = page.layout.as_ref() else {
+        return render_document_lines(page, width, true, None);
+    };
+    let width = usize::from(width.max(28));
+    let mut out = Vec::new();
+
+    out.push(Line::from(vec![
+        Span::styled("  ◫ TERMINAL LAYOUT ", Style::default().fg(Color::Rgb(10, 12, 16)).bg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!(" {} regions · responsive DOM composition ", layout.region_count()),
+            Style::default().fg(MUTED).bg(BG),
+        ),
+    ]));
+    out.push(Line::from(Span::styled(" ", Style::default().bg(BG))));
+
+    if !layout.header.is_empty() {
+        push_layout_box(&mut out, "HEADER", &layout.header, width, Color::Rgb(56, 189, 248), 14);
+        out.push(Line::from(""));
+    }
+
+    if !layout.nav.is_empty() {
+        let nav_line = layout.nav.join("   •   ");
+        push_layout_box(&mut out, "NAV", &[nav_line], width, Color::Rgb(34, 211, 238), 5);
+        out.push(Line::from(""));
+    }
+
+    if layout.cards.len() >= 2 {
+        push_layout_region_grid(&mut out, "COMPONENT GRID", &layout.cards, width);
+        out.push(Line::from(""));
+    } else if layout.sections.len() >= 2 && layout_sections_are_grid_like(&layout.sections) {
+        push_layout_region_grid(&mut out, "SECTION GRID", &layout.sections, width);
+        out.push(Line::from(""));
+    } else if !layout.sections.is_empty() && layout.main.is_empty() {
+        for section in &layout.sections {
+            push_layout_box(
+                &mut out,
+                &format!("SECTION · {}", section.title),
+                &section.lines,
+                width,
+                Color::Rgb(125, 211, 252),
+                120,
+            );
+            out.push(Line::from(""));
+        }
+    }
+
+    if !layout.main.is_empty() || !layout.aside.is_empty() {
+        if !layout.main.is_empty() && !layout.aside.is_empty() && width >= 92 {
+            push_layout_two_columns(&mut out, &layout.main, &layout.aside, width);
+        } else {
+            if !layout.main.is_empty() {
+                push_layout_box(&mut out, "MAIN", &layout.main, width, Color::Rgb(96, 165, 250), 180);
+            }
+            if !layout.aside.is_empty() {
+                if !layout.main.is_empty() {
+                    out.push(Line::from(""));
+                }
+                push_layout_box(&mut out, "ASIDE", &layout.aside, width, Color::Rgb(167, 139, 250), 60);
+            }
+        }
+        out.push(Line::from(""));
+    }
+
+    // Preserve high-detail media even when structural content is arranged into columns.
+    // Image markers remain visible as placeholders in the layout, while the actual RGB
+    // preview is rendered in a full-width media rail where terminal pixels are not lost.
+    if page.images.iter().any(PageImage::is_ready) {
+        out.push(Line::from(vec![
+            Span::styled("  MEDIA ", Style::default().fg(BG).bg(Color::Rgb(45, 212, 191)).add_modifier(Modifier::BOLD)),
+            Span::styled(" compact adaptive previews ", Style::default().fg(MUTED).bg(BG)),
+        ]));
+        out.push(Line::from(""));
+        for image in &page.images {
+            render_inline_image(image, width.min(u16::MAX as usize) as u16, &mut out);
+            out.push(Line::from(""));
+        }
+    }
+
+    if !layout.footer.is_empty() {
+        push_layout_box(&mut out, "FOOTER", &layout.footer, width, Color::Rgb(100, 116, 139), 20);
+    }
+
+    out
+}
+
+fn layout_sections_are_grid_like(sections: &[LayoutRegion]) -> bool {
+    if !(2..=9).contains(&sections.len()) {
+        return false;
+    }
+    let meaningful: usize = sections
+        .iter()
+        .map(|section| section.lines.iter().filter(|line| !line.trim().is_empty()).count())
+        .sum();
+    meaningful <= sections.len() * 9
+}
+
+fn push_layout_region_grid(
+    out: &mut Vec<Line<'static>>,
+    title: &str,
+    regions: &[LayoutRegion],
+    width: usize,
+) {
+    let columns = if width >= 132 { 3 } else if width >= 76 { 2 } else { 1 };
+    out.push(Line::from(Span::styled(
+        format!("  {title} · {} columns", columns),
+        Style::default().fg(ACCENT).bg(BG).add_modifier(Modifier::BOLD),
+    )));
+    out.push(Line::from(""));
+
+    if columns == 1 {
+        for region in regions {
+            push_layout_box(
+                out,
+                &region.title,
+                &region.lines,
+                width,
+                Color::Rgb(45, 212, 191),
+                20,
+            );
+            out.push(Line::from(""));
+        }
+        return;
+    }
+
+    let gap = 2usize;
+    let cell_width = (width.saturating_sub(gap * (columns - 1)) / columns).max(24);
+    for group in regions.chunks(columns) {
+        let mut cells: Vec<Vec<String>> = group
+            .iter()
+            .map(|region| plain_layout_box(&region.title, &region.lines, cell_width, 18))
+            .collect();
+        while cells.len() < columns {
+            cells.push(vec![" ".repeat(cell_width)]);
+        }
+        let height = cells.iter().map(Vec::len).max().unwrap_or(0);
+        for row in 0..height {
+            let mut spans = Vec::new();
+            for (index, cell) in cells.iter().enumerate() {
+                if index > 0 {
+                    spans.push(Span::styled("  ", Style::default().bg(BG)));
+                }
+                let text = cell.get(row).cloned().unwrap_or_else(|| " ".repeat(cell_width));
+                spans.push(Span::styled(
+                    pad_layout_text(&text, cell_width),
+                    Style::default().fg(if row == 0 { Color::Rgb(94, 234, 212) } else { TEXT }).bg(SURFACE),
+                ));
+            }
+            out.push(Line::from(spans));
+        }
+        out.push(Line::from(""));
+    }
+}
+
+fn push_layout_two_columns(
+    out: &mut Vec<Line<'static>>,
+    main: &[String],
+    aside: &[String],
+    width: usize,
+) {
+    let gap = 2usize;
+    let aside_width = (width / 3).clamp(26, 42);
+    let main_width = width.saturating_sub(aside_width + gap).max(40);
+    let left = plain_layout_box("MAIN", main, main_width, 180);
+    let right = plain_layout_box("ASIDE", aside, aside_width, 60);
+    let height = left.len().max(right.len());
+
+    for row in 0..height {
+        let left_text = left.get(row).cloned().unwrap_or_else(|| " ".repeat(main_width));
+        let right_text = right.get(row).cloned().unwrap_or_else(|| " ".repeat(aside_width));
+        out.push(Line::from(vec![
+            Span::styled(
+                pad_layout_text(&left_text, main_width),
+                Style::default().fg(if row == 0 { Color::Rgb(147, 197, 253) } else { TEXT }).bg(SURFACE),
+            ),
+            Span::styled("  ", Style::default().bg(BG)),
+            Span::styled(
+                pad_layout_text(&right_text, aside_width),
+                Style::default().fg(if row == 0 { Color::Rgb(196, 181, 253) } else { Color::Rgb(203, 213, 225) }).bg(QUOTE_BG),
+            ),
+        ]));
+    }
+}
+
+fn push_layout_box(
+    out: &mut Vec<Line<'static>>,
+    title: &str,
+    lines: &[String],
+    width: usize,
+    accent: Color,
+    max_rows: usize,
+) {
+    let rows = plain_layout_box(title, lines, width, max_rows);
+    for (index, row) in rows.into_iter().enumerate() {
+        let style = if index == 0 {
+            Style::default().fg(accent).bg(SURFACE).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(TEXT).bg(SURFACE)
+        };
+        out.push(Line::from(Span::styled(row, style)));
+    }
+}
+
+fn plain_layout_box(title: &str, lines: &[String], width: usize, max_rows: usize) -> Vec<String> {
+    let width = width.max(18);
+    let inner = width.saturating_sub(4).max(10);
+    let title = truncate_layout_text(title, inner.saturating_sub(3));
+    let mut rows = Vec::new();
+    let top_label = format!("─ {title} ");
+    let remaining = width.saturating_sub(1 + top_label.chars().count());
+    rows.push(format!("╭{top_label}{}╮", "─".repeat(remaining.saturating_sub(1))));
+
+    let mut body = Vec::new();
+    for source in lines {
+        let text = layout_source_to_text(source);
+        if text.is_empty() {
+            if body.last().is_some_and(|row: &String| !row.is_empty()) {
+                body.push(String::new());
+            }
+            continue;
+        }
+        for wrapped in wrap_layout_text(&text, inner) {
+            body.push(wrapped);
+            if body.len() >= max_rows {
+                break;
+            }
+        }
+        if body.len() >= max_rows {
+            break;
+        }
+    }
+    if body.len() >= max_rows && lines.len() > body.len() {
+        if let Some(last) = body.last_mut() {
+            *last = truncate_layout_text("… content continues …", inner);
+        }
+    }
+    if body.is_empty() {
+        body.push(String::new());
+    }
+    for row in body {
+        rows.push(format!("│ {} │", pad_layout_text(&row, inner)));
+    }
+    rows.push(format!("╰{}╯", "─".repeat(width.saturating_sub(2))));
+    rows
+}
+
+fn layout_source_to_text(source: &str) -> String {
+    if source == HR_MARKER {
+        return "────────────────".to_string();
+    }
+    if source.starts_with(IMAGE_MARKER_PREFIX) {
+        return "▣ IMAGE · full preview in MEDIA rail".to_string();
+    }
+    if let Some(text) = source.strip_prefix("# ") {
+        return format!("█ {}", text.trim());
+    }
+    if let Some(text) = source.strip_prefix("## ") {
+        return format!("◆ {}", text.trim());
+    }
+    if let Some(text) = source.strip_prefix("### ") {
+        return format!("› {}", text.trim());
+    }
+    if let Some(text) = source.strip_prefix("    ") {
+        return format!("  {}", text.trim_end());
+    }
+    source.to_string()
+}
+
+fn wrap_layout_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![String::new()];
+    }
+    let mut rows = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let word_len = word.chars().count();
+        if current.is_empty() {
+            if word_len <= width {
+                current.push_str(word);
+            } else {
+                let chars: Vec<char> = word.chars().collect();
+                for chunk in chars.chunks(width) {
+                    rows.push(chunk.iter().collect());
+                }
+            }
+            continue;
+        }
+        if current.chars().count() + 1 + word_len <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            rows.push(current);
+            current = String::new();
+            if word_len <= width {
+                current.push_str(word);
+            } else {
+                let chars: Vec<char> = word.chars().collect();
+                for chunk in chars.chunks(width) {
+                    rows.push(chunk.iter().collect());
+                }
+            }
+        }
+    }
+    if !current.is_empty() {
+        rows.push(current);
+    }
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+    rows
+}
+
+fn truncate_layout_text(value: &str, width: usize) -> String {
+    if value.chars().count() <= width {
+        return value.to_string();
+    }
+    if width <= 1 {
+        return "…".chars().take(width).collect();
+    }
+    let mut out: String = value.chars().take(width - 1).collect();
+    out.push('…');
+    out
+}
+
+fn pad_layout_text(value: &str, width: usize) -> String {
+    let clipped = truncate_layout_text(value, width);
+    let len = clipped.chars().count();
+    format!("{}{}", clipped, " ".repeat(width.saturating_sub(len)))
 }
 
 fn render_document_lines(
@@ -2537,6 +3267,10 @@ fn render_document_lines(
 fn rendered_offset_for_source(page: &Page, width: u16, visual: bool, source_index: usize) -> usize {
     let mut offset = 0usize;
     for source in page.lines.iter().take(source_index) {
+        if source == HR_MARKER {
+            offset = offset.saturating_add(1);
+            continue;
+        }
         if let Some(raw_index) = source.strip_prefix(IMAGE_MARKER_PREFIX) {
             let image_index = raw_index.parse::<usize>().unwrap_or(usize::MAX);
             if visual {
@@ -2546,7 +3280,16 @@ fn rendered_offset_for_source(page: &Page, width: u16, visual: bool, source_inde
                 }
             }
         }
-        offset = offset.saturating_add(1);
+
+        // Search offsets must use the same wrapped-row model as scrolling.
+        // Otherwise finding text in a long paragraph can jump above the actual
+        // match and leave the viewport's scroll range out of sync.
+        let rendered_line = if visual {
+            style_visual_line(source, false)
+        } else {
+            style_reader_line(source, false)
+        };
+        offset = offset.saturating_add(wrapped_render_height(&[rendered_line], width));
     }
     offset
 }
@@ -2555,10 +3298,34 @@ fn inline_image_height(image: &PageImage, width: u16) -> usize {
     if !image.is_ready() {
         return 3;
     }
+    let (_, target_height) = inline_image_dimensions(image, width);
+    2 + target_height.div_ceil(2) as usize
+}
+
+fn inline_image_dimensions(image: &PageImage, width: u16) -> (u32, u32) {
     let available = u32::from(width.saturating_sub(4).max(8));
-    let target_width = image.pixel_width.min(available).max(1);
-    let target_height = (image.pixel_height.saturating_mul(target_width) / image.pixel_width.max(1)).max(1);
-    2 + ((target_height + 1) / 2) as usize
+
+    // Inline media should complement terminal content instead of taking over the
+    // whole viewport. On desktop-sized terminals we target roughly half the
+    // content width; on narrow terminals the preview shrinks even further.
+    let adaptive_width = if available >= 132 {
+        (available * 52 / 100).min(72)
+    } else if available >= 92 {
+        (available * 50 / 100).min(64)
+    } else {
+        (available * 46 / 100).clamp(20, 48)
+    }
+    .max(1);
+
+    // `▀` packs two image rows into one terminal row. Capping the pixel height
+    // at 72 keeps even portrait images to at most ~36 terminal rows.
+    let max_height = 72;
+    fit_image_dimensions(
+        image.pixel_width.max(1),
+        image.pixel_height.max(1),
+        image.pixel_width.min(adaptive_width).max(1),
+        max_height,
+    )
 }
 
 fn render_inline_image(image: &PageImage, width: u16, out: &mut Vec<Line<'static>>) {
@@ -2589,15 +3356,25 @@ fn render_inline_image(image: &PageImage, width: u16, out: &mut Vec<Line<'static
         return;
     }
 
-    let available = u32::from(width.saturating_sub(4).max(8));
-    let target_width = image.pixel_width.min(available).max(1);
-    let target_height = (image.pixel_height.saturating_mul(target_width) / image.pixel_width.max(1)).max(1);
+    let (target_width, target_height) = inline_image_dimensions(image, width);
 
     out.push(Line::from(vec![
         Span::styled("╭─ IMAGE ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
         Span::styled(alt.clone(), Style::default().fg(TEXT).add_modifier(Modifier::BOLD)),
         Span::styled(
-            format!("  {}×{}", image.pixel_width, image.pixel_height),
+            if image.source_width > 0 && image.source_height > 0 {
+                format!(
+                    "  {}×{} · buffer {}×{} · view {}×{}",
+                    image.source_width,
+                    image.source_height,
+                    image.pixel_width,
+                    image.pixel_height,
+                    target_width,
+                    target_height
+                )
+            } else {
+                format!("  buffer {}×{} · view {}×{}", image.pixel_width, image.pixel_height, target_width, target_height)
+            },
             Style::default().fg(MUTED),
         ),
     ]));
@@ -2606,13 +3383,13 @@ fn render_inline_image(image: &PageImage, width: u16, out: &mut Vec<Line<'static
         let mut spans = Vec::with_capacity(target_width as usize + 1);
         spans.push(Span::styled("│ ", Style::default().fg(ACCENT_SOFT).bg(BG)));
         for target_x in 0..target_width {
-            let source_x = target_x.saturating_mul(image.pixel_width) / target_width;
-            let top_y = target_y.saturating_mul(image.pixel_height) / target_height;
+            let source_x = scale_sample_coordinate(target_x, target_width, image.pixel_width);
+            let top_y = scale_sample_coordinate(target_y, target_height, image.pixel_height);
             let bottom_target_y = (target_y + 1).min(target_height.saturating_sub(1));
-            let bottom_y = bottom_target_y.saturating_mul(image.pixel_height) / target_height;
-            let top = image_rgb_at(image, source_x, top_y);
+            let bottom_y = scale_sample_coordinate(bottom_target_y, target_height, image.pixel_height);
+            let top = image_rgb_bilinear(image, source_x, top_y);
             let bottom = if target_y + 1 < target_height {
-                image_rgb_at(image, source_x, bottom_y)
+                image_rgb_bilinear(image, source_x, bottom_y)
             } else {
                 (5, 8, 12)
             };
@@ -2632,6 +3409,48 @@ fn render_inline_image(image: &PageImage, width: u16, out: &mut Vec<Line<'static
             Style::default().fg(MUTED),
         ),
     ]));
+}
+
+fn scale_sample_coordinate(target: u32, target_size: u32, source_size: u32) -> f32 {
+    if target_size <= 1 || source_size <= 1 {
+        0.0
+    } else {
+        target as f32 * (source_size - 1) as f32 / (target_size - 1) as f32
+    }
+}
+
+fn image_rgb_bilinear(image: &PageImage, x: f32, y: f32) -> (u8, u8, u8) {
+    if !image.is_ready() {
+        return (5, 8, 12);
+    }
+
+    let max_x = image.pixel_width.saturating_sub(1);
+    let max_y = image.pixel_height.saturating_sub(1);
+    let x = x.clamp(0.0, max_x as f32);
+    let y = y.clamp(0.0, max_y as f32);
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let x1 = (x0 + 1).min(max_x);
+    let y1 = (y0 + 1).min(max_y);
+    let tx = x - x0 as f32;
+    let ty = y - y0 as f32;
+
+    let p00 = image_rgb_at(image, x0, y0);
+    let p10 = image_rgb_at(image, x1, y0);
+    let p01 = image_rgb_at(image, x0, y1);
+    let p11 = image_rgb_at(image, x1, y1);
+
+    let blend = |a: u8, b: u8, c: u8, d: u8| -> u8 {
+        let top = a as f32 + (b as f32 - a as f32) * tx;
+        let bottom = c as f32 + (d as f32 - c as f32) * tx;
+        (top + (bottom - top) * ty).round().clamp(0.0, 255.0) as u8
+    };
+
+    (
+        blend(p00.0, p10.0, p01.0, p11.0),
+        blend(p00.1, p10.1, p01.1, p11.1),
+        blend(p00.2, p10.2, p01.2, p11.2),
+    )
 }
 
 fn image_rgb_at(image: &PageImage, x: u32, y: u32) -> (u8, u8, u8) {
@@ -2743,6 +3562,21 @@ fn style_reader_line(line: &str, is_match: bool) -> Line<'static> {
         return Line::from(Span::styled(line.to_string(), Style::default().fg(Color::Rgb(165, 243, 252)).bg(base_bg)));
     }
     Line::from(Span::styled(line.to_string(), Style::default().fg(TEXT).bg(base_bg)))
+}
+
+/// Estimate the number of terminal rows ratatui's wrapped Paragraph will use.
+/// `Line::width()` uses terminal Unicode width, so wide glyphs and our image
+/// block characters are measured in the same units as the TUI renderer.
+fn wrapped_render_height(lines: &[Line<'_>], width: u16) -> usize {
+    let width = usize::from(width.max(1));
+    lines
+        .iter()
+        .map(|line| {
+            let cells = line.width().max(1);
+            cells.div_ceil(width)
+        })
+        .sum::<usize>()
+        .max(1)
 }
 
 fn help_row<'a>(key: &'a str, description: &'a str) -> Line<'a> {
@@ -2859,8 +3693,9 @@ fn run_doctor() -> Result<()> {
         Ok(config) => {
             println!("[OK] Config: {}", paths.config.display());
             println!(
-                "[OK] Visual: {} · images {} · max {} · width {} · {} KB/image",
+                "[OK] Visual: {} · layout {} · images {} · max {} · HD width {} · Lanczos3 · {} KB/image",
                 if config.visual_mode { "on" } else { "off" },
+                if config.layout_mode { "on" } else { "off" },
                 if config.load_images { "on" } else { "off" },
                 config.max_images,
                 config.image_width,
@@ -2908,7 +3743,7 @@ fn run_doctor() -> Result<()> {
 
 fn print_cli_help() {
     println!(
-        "NOX {} — portable terminal-first browser with visual rendering\n\n\
+        "NOX {} — portable terminal-first browser with responsive layout rendering\n\n\
          USAGE:\n  nox [URL | search query]\n  nox search <query>\n  nox --dump <URL | search query>\n  nox doctor\n  nox install\n  nox uninstall\n  nox update [--check]\n  nox config --path\n  nox data --path\n  nox cookies clear\n  nox --version\n\n\
          TUI ESSENTIALS:\n  Ctrl+T/Ctrl+W   tabs\n  Ctrl+L          omnibox\n  s               web search\n  :               command palette\n  g               link hints\n  / · n/N         find · next/previous\n  m / M           toggle bookmark / bookmarks\n  H               history\n  F               forms\n  R               reader mode\n  V               visual mode / image previews\n  Tab             links\n\n\
          SEARCH:\n  ? query         force configured web search\n  !ddg query      DuckDuckGo\n  !g query        Google\n  !gh query       GitHub\n  !w query        Wikipedia\n\n\
@@ -3062,6 +3897,63 @@ mod tests {
         assert_eq!(page.images.len(), 1);
         assert_eq!(page.images[0].url.as_str(), "https://example.com/hero.png");
         assert!(page.lines.iter().any(|line| line.starts_with(IMAGE_MARKER_PREFIX)));
+    }
+
+    #[test]
+    fn hd_image_fit_preserves_landscape_ratio() {
+        assert_eq!(fit_image_dimensions(1200, 800, 96, 384), (96, 64));
+    }
+
+    #[test]
+    fn hd_image_fit_preserves_portrait_ratio() {
+        assert_eq!(fit_image_dimensions(800, 2400, 96, 384), (96, 288));
+        assert_eq!(fit_image_dimensions(500, 5000, 96, 384), (38, 384));
+    }
+
+    #[test]
+    fn hd_image_width_is_default() {
+        assert_eq!(config().image_width, 64);
+    }
+
+    #[test]
+    fn terminal_layout_extracts_semantic_regions() {
+        let page = parse_html_page(
+            Url::parse("https://example.com").unwrap(),
+            200,
+            "<html><body><header><h1>Brand</h1></header><nav><a href='/a'>Docs</a><a href='/b'>Blog</a></nav><main><section><h2>Hero</h2><p>Hello terminal</p></section><section><h2>Features</h2><p>Fast browser</p></section></main><aside><p>Side note</p></aside><footer><p>Copyright</p></footer></body></html>",
+            false,
+            8,
+        );
+        let layout = page.layout.expect("semantic layout");
+        assert!(!layout.header.is_empty());
+        assert_eq!(layout.nav.len(), 2);
+        assert!(!layout.aside.is_empty());
+        assert!(!layout.footer.is_empty());
+        assert!(layout.sections.len() >= 2);
+    }
+
+    #[test]
+    fn layout_mode_is_enabled_by_default() {
+        assert!(config().layout_mode);
+        assert_eq!(config().config_revision, 701);
+    }
+
+    #[test]
+    fn inline_images_stay_compact_on_desktop_terminals() {
+        let mut image = PageImage::pending(
+            "Portrait".to_string(),
+            Url::parse("https://example.com/portrait.png").unwrap(),
+        );
+        image.pixel_width = 96;
+        image.pixel_height = 288;
+        image.rgb = vec![0; (96 * 288 * 3) as usize];
+        assert_eq!(inline_image_dimensions(&image, 120), (24, 72));
+    }
+
+    #[test]
+    fn wrapped_height_counts_terminal_rows_not_logical_lines() {
+        let lines = vec![Line::from("x".repeat(25)), Line::from("ok")];
+        assert_eq!(wrapped_render_height(&lines, 10), 4);
     }
 
     #[test]

@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.7.4
+
+- Clean Clippy pass: removed five non-functional style warnings.
+- Simplified Windows install destination expression, link-hint match guard, command palette selection check, and integer ceiling division.
+- No behavior changes relative to 0.7.3.
+
+## 0.7.3
+
+- исправлен semantic layout extractor: короткие валидные `<section>`/`<article>` больше не отбрасываются из-за слишком высокого fingerprint threshold;
+- regression-test `terminal_layout_extracts_semantic_regions` теперь проверяет реальное поведение extractor, а не обходится ослаблением assertion;
+- сохранены scroll/focus fixes из 0.7.2 и compact adaptive images из 0.7.1.
+
+## 0.7.2
+
+- исправлен scroll regression: высота документа теперь считается по реально перенесённым terminal rows, а не по количеству логических `Line`;
+- `↑/↓`, `j/k`, PageUp/PageDown и End снова работают на длинных Flow/Visual страницах после URL navigation и поиска;
+- после успешной навигации NOX централизованно возвращает focus в `Mode::Normal` и очищает stale input/hints state;
+- обработка клавиатуры принимает `KeyEventKind::Repeat`, поэтому удерживание стрелок и `j/k` даёт непрерывную прокрутку;
+- поиск по странице после Enter также гарантированно возвращает document focus;
+- сохранены Terminal Layout Engine и компактные adaptive image previews из 0.7.1.
+
+## 0.7.1
+
+- исправлен Rust borrow-checker `E0506` в `draw_reader`: immutable borrow страницы теперь завершается до обновления `rendered_height`;
+- изображения стали компактнее: default HD buffer `96` → `64`;
+- фактическая ширина preview адаптируется к терминалу (~46–52% content area, максимум 72 колонки);
+- высокие изображения ограничены примерно 36 строками терминала без искажения aspect ratio;
+- metadata изображения теперь показывает source/buffer/view размеры;
+- config migration `701` аккуратно переводит только прежний default `96` → `64`, сохраняя пользовательские значения.
+
+## 0.7.0
+
+- добавлен Terminal Layout Engine и горячая клавиша `L` (`LAYOUT ↔ FLOW`);
+- HTML DOM анализируется как `header/nav/main/aside/section/article/footer`;
+- `main + aside` получают responsive двухколоночную композицию на широком терминале;
+- короткие sections/card/feature/tile компоненты автоматически раскладываются в 1/2/3-column grid;
+- layout автоматически reflow-ится в одну колонку на узких viewport;
+- добавлены terminal-native panel borders, region labels и отдельная визуальная иерархия;
+- HD image previews сохранены и выводятся в full-width MEDIA rail, чтобы колонки не уничтожали детализацию изображения;
+- `:layout` добавлен в Command Palette;
+- `layout_mode = true` и `config_revision = 700` добавлены в config;
+- `nox doctor` показывает состояние layout renderer;
+- добавлены unit tests semantic region extraction и default layout config;
+- добавлен `LAYOUT.md`.
+
+## 0.6.1
+
+- HD image renderer: default preview width увеличен с 48 до 96 px;
+- максимальная настраиваемая ширина preview увеличена до 160 px;
+- удалено квадратное ограничение preview, portrait/landscape сохраняют aspect ratio;
+- resize изображений выполняется через Lanczos3;
+- при адаптации под более узкий terminal viewport используется bilinear sampling;
+- image metadata показывает исходное разрешение и HD preview resolution;
+- добавлен `config_revision = 601` и одноразовая миграция старого default `image_width = 48` → `96`;
+- добавлены unit tests для aspect-ratio fitting;
+- сохранён idempotent Windows installer fix.
+
 ## 0.6.0
 
 - добавлен Visual Mode (`V`, `:visual`) с сохранением настройки в `config.toml`;

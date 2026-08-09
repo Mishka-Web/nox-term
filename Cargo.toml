@@ -1,8 +1,8 @@
 [package]
 name = "nox-browser"
-version = "0.6.0"
+version = "0.7.4"
 edition = "2021"
-description = "A portable terminal-first web browser with reader and visual rendering"
+description = "A portable terminal-first web browser with responsive terminal layout rendering"
 license = "MIT"
 
 [[bin]]

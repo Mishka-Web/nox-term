@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    pub config_revision: u32,
     pub homepage: String,
     pub search_engine: String,
     pub restore_session: bool,
@@ -18,6 +19,7 @@ pub struct AppConfig {
     pub user_agent: String,
     pub download_dir: Option<String>,
     pub visual_mode: bool,
+    pub layout_mode: bool,
     pub load_images: bool,
     pub max_images: usize,
     pub image_width: u32,
@@ -27,6 +29,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            config_revision: 701,
             homepage: "about:home".to_string(),
             search_engine: "https://lite.duckduckgo.com/lite/?q={query}".to_string(),
             restore_session: true,
@@ -35,9 +38,10 @@ impl Default for AppConfig {
             user_agent: format!("NOX/{} terminal-browser", env!("CARGO_PKG_VERSION")),
             download_dir: None,
             visual_mode: true,
+            layout_mode: true,
             load_images: true,
             max_images: 8,
-            image_width: 48,
+            image_width: 64,
             image_max_bytes: 2_000_000,
         }
     }
@@ -118,9 +122,47 @@ pub fn load_config(paths: &Paths) -> Result<AppConfig> {
         changed = true;
     }
 
+    // NOX 0.6.1 raises the shipped image preview width from 48 to 96.
+    // Use a persisted config revision so this migration runs only once; after
+    // that the user can intentionally set image_width back to 48 if desired.
+    let raw_revision = raw
+        .lines()
+        .find_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("config_revision =")
+                .and_then(|value| value.trim().parse::<u32>().ok())
+        })
+        .unwrap_or(0);
+    if raw_revision < 601 {
+        if config.image_width == 48 {
+            config.image_width = 96;
+        }
+        config.config_revision = 601;
+        changed = true;
+    }
+
+    // NOX 0.7 adds Terminal Layout. Keep existing user choices and only persist
+    // the new default once so it becomes visible in config.toml.
+    if raw_revision < 700 {
+        config.layout_mode = true;
+        config.config_revision = 700;
+        changed = true;
+    }
+
+    // NOX 0.7.1 keeps the HD decode pipeline but ships a calmer 64px quality
+    // target. Only migrate the previous shipped default (96); intentional custom
+    // widths remain untouched. Final on-screen size is also adaptive to viewport.
+    if raw_revision < 701 {
+        if config.image_width == 96 {
+            config.image_width = 64;
+        }
+        config.config_revision = 701;
+        changed = true;
+    }
+
     // NOX 0.6 added Visual Mode settings. Serde fills missing fields from Default;
     // write them back once so existing users can discover and tune them in config.toml.
-    for key in ["visual_mode", "load_images", "max_images", "image_width", "image_max_bytes"] {
+    for key in ["visual_mode", "layout_mode", "load_images", "max_images", "image_width", "image_max_bytes"] {
         if !raw.lines().any(|line| line.trim_start().starts_with(&format!("{key} ="))) {
             changed = true;
             break;

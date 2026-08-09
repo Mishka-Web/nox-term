@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NOX Layout Demo</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;font:16px/1.5 system-ui;background:#090c10;color:#e2e8f0}
+    header,nav,main,footer{max-width:1180px;margin:auto;padding:20px} header{display:flex;justify-content:space-between;align-items:center}
+    nav{display:flex;gap:24px;border-block:1px solid #1e293b} a{color:#38bdf8}.shell{display:grid;grid-template-columns:1fr 280px;gap:24px;max-width:1180px;margin:auto}
+    main{padding-inline:0}.hero{padding:42px 0}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.card{padding:20px;border:1px solid #243244;border-radius:14px;background:#0f1218}
+    aside{padding:20px;border-left:1px solid #243244} footer{margin-top:32px;border-top:1px solid #1e293b;color:#94a3b8}
+  </style>
+</head>
+<body>
+<header>
+  <h1>NOX Studio</h1>
+  <p>Terminal-native web experience</p>
+</header>
+<nav>
+  <a href="#product">Product</a><a href="#features">Features</a><a href="#docs">Docs</a><a href="https://github.com/">GitHub</a>
+</nav>
+<div class="shell">
+<main>
+  <section class="hero" id="product">
+    <h2>The web, reconstructed for your terminal.</h2>
+    <p>NOX reads semantic HTML and turns the document into a responsive character-cell interface.</p>
+  </section>
+  <section id="features">
+    <h2>Features</h2>
+    <div class="features">
+      <div class="card"><h3>Responsive layout</h3><p>Panels become columns on wide terminals and stack on narrow screens.</p></div>
+      <div class="card"><h3>HD media</h3><p>True-color half-block previews preserve image detail without a GUI.</p></div>
+      <div class="card"><h3>Keyboard first</h3><p>Search, hints, tabs and command palette are always one key away.</p></div>
+    </div>
+  </section>
+  <article id="docs">
+    <h2>Developer workflow</h2>
+    <p>Use NOX over SSH, inside a local shell or as a fast document and API inspection tool.</p>
+    <blockquote>Terminal layout is an adaptation, not a screenshot.</blockquote>
+    <pre>nox https://example.com</pre>
+  </article>
+</main>
+<aside>
+  <h2>On this page</h2>
+  <ul><li>Product</li><li>Features</li><li>Developer workflow</li></ul>
+  <p>Status: experimental layout engine.</p>
+</aside>
+</div>
+<footer><p>NOX Browser · Terminal Layout Engine demo</p></footer>
+</body>
+</html>

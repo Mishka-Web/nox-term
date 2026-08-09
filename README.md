@@ -1,8 +1,8 @@
-# NOX Browser 0.6.0
+# NOX Browser 0.7.4
 
-**NOX** — portable terminal-first браузер на Rust: keyboard-first, без Chromium, с Reader Mode, поиском, вкладками и новым **Visual Mode**.
+**NOX** — portable terminal-first браузер на Rust: keyboard-first, без Chromium, с Reader Mode, поиском, вкладками, **HD Visual Mode** и **Terminal Layout Engine**.
 
-NOX 0.6 умеет показывать изображения прямо в терминале, используя true-color Unicode half-block rendering. Для этого не требуется отдельное GUI-окно или специальный terminal image protocol.
+NOX 0.7.4 умеет реконструировать структуру HTML-страницы как responsive terminal UI: `header`, `nav`, `main`, `aside`, `section`, card-like компоненты и `footer` раскладываются в панели, колонки и сетки в зависимости от ширины терминала. HD image renderer сохранён, но 0.7.4 делает его компактным и адаптивным: изображения больше не захватывают почти весь экран терминала.
 
 ## Установка
 
@@ -28,7 +28,53 @@ curl -fsSL https://github.com/Mishka-Web/nox-term/releases/latest/download/insta
 
 Подробнее: [INSTALL.md](INSTALL.md). Перед релизом: [TESTING.md](TESTING.md).
 
-## Что нового в 0.6 — Visual Content
+## Что нового в 0.7.4 — Terminal Layout Engine
+
+Переключение:
+
+```text
+L
+```
+
+`LAYOUT` пытается воспроизвести композицию сайта в терминальных ограничениях, а `FLOW` оставляет привычный линейный renderer.
+
+Layout analyzer распознаёт:
+
+- `header`, `nav`, `main`, `aside`, `footer`;
+- `section` и `article`;
+- card/feature/tile-like компоненты по DOM/class heuristics;
+- короткие component groups и раскладывает их в 1/2/3 колонки;
+- `main + aside` выводит рядом на широком терминале;
+- на узком терминале автоматически выполняет responsive reflow в одну колонку;
+- изображения оставляет на своих местах как media placeholders и дополнительно выводит compact adaptive media rail.
+
+Пример концепции:
+
+```text
+╭─ HEADER ─────────────────────────────────────────────────────────╮
+│ Brand                              Sign in   Docs   Download      │
+╰──────────────────────────────────────────────────────────────────╯
+╭─ NAV ────────────────────────────────────────────────────────────╮
+│ Home   •   Guide   •   Blog   •   GitHub                         │
+╰──────────────────────────────────────────────────────────────────╯
+
+╭─ MAIN ─────────────────────────────────────╮  ╭─ ASIDE ─────────╮
+│ █ Build software in Rust                   │  │ On this page    │
+│ text...                                    │  │ • Install       │
+│                                            │  │ • Examples      │
+╰────────────────────────────────────────────╯  ╰──────────────────╯
+
+  COMPONENT GRID · 3 columns
+╭─ Fast ─────────╮  ╭─ Safe ─────────╮  ╭─ Portable ─────╮
+│ ...            │  │ ...            │  │ ...            │
+╰────────────────╯  ╰────────────────╯  ╰─────────────────╯
+```
+
+Это не Chromium и не pixel-perfect CSS engine: NOX не исполняет CSS/JavaScript один-в-один. Он строит **terminal-native representation** по DOM-семантике и layout heuristics, поэтому цель — максимально похожая структура и информационная иерархия, а не совпадение каждого CSS-пикселя.
+
+Подробнее: [LAYOUT.md](LAYOUT.md).
+
+## Что нового в 0.6.1 — HD Visual Content
 
 ### Visual Mode
 
@@ -75,6 +121,16 @@ NOX находит HTML `<img>` и lazy-loading атрибуты (`data-src`, `d
 
 SVG пока отображается как fallback-карточка, если декодировать его нельзя.
 
+### HD image pipeline
+
+В 0.6.1 bitmap больше не зажимается в старый квадрат `48×48`. NOX сохраняет aspect ratio, использует ширину preview до `96` по умолчанию (`24..160` настраиваемо), допускает более высокие portrait previews и применяет `Lanczos3`. Если терминал уже preview, цвета выбираются через bilinear sampling вместо грубого nearest-neighbor.
+
+Заголовок изображения показывает исходное и терминальное разрешение, например:
+
+```text
+IMAGE Ferris  512×512 · HD 96×96
+```
+
 ### Direct image URLs
 
 Можно открыть изображение непосредственно:
@@ -90,10 +146,12 @@ NOX создаст визуальный документ с preview картин
 По умолчанию:
 
 ```toml
+config_revision = 701
 visual_mode = true
+layout_mode = true
 load_images = true
 max_images = 8
-image_width = 48
+image_width = 64
 image_max_bytes = 2000000
 ```
 
@@ -195,6 +253,7 @@ N     предыдущее совпадение
 | `/` | find |
 | `n` / `N` | next / previous match |
 | `V` | Visual Mode / Text Mode |
+| `L` | Terminal Layout / Flow |
 | `R` | Reader Mode |
 | `Ctrl+T` / `Ctrl+W` | новая / закрыть вкладку |
 | `Ctrl+Tab` | следующая вкладка |
@@ -249,7 +308,7 @@ user_agent = "NOX/0.6 terminal-browser"
 visual_mode = true
 load_images = true
 max_images = 8
-image_width = 48
+image_width = 64
 image_max_bytes = 2000000
 # download_dir = "D:/Downloads/NOX"
 ```
@@ -276,8 +335,8 @@ cargo build --release
 После зелёных локальных проверок и CI:
 
 ```bash
-git tag v0.6.0
-git push origin v0.6.0
+git tag v0.7.4
+git push origin v0.7.4
 ```
 
 ## Roadmap

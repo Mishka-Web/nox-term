@@ -1,4 +1,4 @@
-# NOX 0.6 — использование
+# NOX 0.7 — использование
 
 ## Запуск
 
@@ -7,6 +7,12 @@ nox
 nox example.com
 nox "rust terminal browser"
 ```
+
+## Terminal Layout
+
+`L` переключает `LAYOUT ↔ FLOW`. В Layout Mode NOX реконструирует DOM как responsive terminal UI: header/nav/main/aside/footer, sections и component grids. На широких viewport появляются колонки, на узких выполняется reflow.
+
+`:` → `layout` делает то же самое. Поиск `/` при активном совпадении использует линейное представление, чтобы позиционирование оставалось точным.
 
 ## Visual Mode
 
@@ -103,9 +109,10 @@ Visual settings:
 
 ```toml
 visual_mode = true
+layout_mode = true
 load_images = true
 max_images = 8
-image_width = 48
+image_width = 64
 image_max_bytes = 2000000
 ```
 
@@ -140,3 +147,7 @@ nox doctor
 ```
 
 0.6 также показывает текущие visual/image настройки.
+
+## HD images (0.6.1)
+
+`image_width = 64` используется по умолчанию. Допустимый диапазон — `24..160`. После изменения ширины выполните reload страницы, чтобы NOX заново декодировал preview с новым quality target.
