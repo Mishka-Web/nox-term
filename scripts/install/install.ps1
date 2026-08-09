@@ -62,7 +62,28 @@ try {
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     $Destination = Join-Path $InstallDir "nox.exe"
-    Move-Item -Force $BinaryPath $Destination
+
+    # The installer is intentionally idempotent: running it again upgrades or
+    # reinstalls NOX in place. Move-Item -Force does not reliably replace an
+    # existing destination file on Windows PowerShell, so use File.Copy with
+    # overwrite enabled instead.
+    $ExistingVersion = $null
+    if (Test-Path -LiteralPath $Destination) {
+        try {
+            $ExistingVersion = (& $Destination --version | Select-Object -First 1)
+        }
+        catch {
+            $ExistingVersion = $null
+        }
+    }
+
+    try {
+        [System.IO.File]::Copy($BinaryPath, $Destination, $true)
+    }
+    catch {
+        Fail "could not replace $Destination. Close any running NOX process and try again. $($_.Exception.Message)"
+    }
+
     Unblock-File -Path $Destination -ErrorAction SilentlyContinue
 
     $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -78,8 +99,18 @@ try {
         $env:Path = "$InstallDir;$env:Path"
     }
 
-    $Version = & $Destination --version
-    Write-Host "Installed $Version to $Destination"
+    $Version = (& $Destination --version | Select-Object -First 1)
+    if ($ExistingVersion) {
+        if ($ExistingVersion -eq $Version) {
+            Write-Host "Reinstalled $Version to $Destination"
+        }
+        else {
+            Write-Host "Updated $ExistingVersion -> $Version at $Destination"
+        }
+    }
+    else {
+        Write-Host "Installed $Version to $Destination"
+    }
 
     $Resolved = Get-Command nox -ErrorAction SilentlyContinue
     if ($Resolved) {
