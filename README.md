@@ -1,4 +1,4 @@
-# NOX Browser 0.4.1
+# NOX Browser 0.4.2
 
 **NOX** — минималистичный portable terminal browser на Rust: reader-first, keyboard-first, без Chromium и без обязательных runtime-зависимостей у конечного пользователя.
 
@@ -25,7 +25,7 @@ nox --version
 ### Windows — GitHub Release
 
 ```powershell
-irm https://github.com/Mishka-Web/nox-term/releases/latest/download/install.ps1 | iex
+irm https://raw.githubusercontent.com/Mishka-Web/nox-term/main/install.ps1 | iex
 ```
 
 ### Linux / macOS

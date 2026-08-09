@@ -17,7 +17,7 @@ nox github.com
 Для опубликованного GitHub Release:
 
 ```powershell
-irm https://github.com/Mishka-Web/nox-term/releases/latest/download/install.ps1 | iex
+irm https://raw.githubusercontent.com/Mishka-Web/nox-term/main/install.ps1 | iex
 ```
 
 Установщик:

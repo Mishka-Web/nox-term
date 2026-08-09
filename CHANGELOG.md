@@ -1,5 +1,13 @@
 # Changelog
 
+
+## 0.4.2
+
+- Исправлен однострочный установщик Windows PowerShell.
+- Добавлен корневой `install.ps1` bootstrap для `raw.githubusercontent.com`.
+- Bootstrap скачивает GitHub Release installer во временный файл, читает его как UTF-8 и выполняет в текущей PowerShell-сессии.
+- После установки команда `nox` доступна сразу в текущем PowerShell и сохраняется в пользовательском `PATH`.
+
 ## 0.4.1
 
 - добавлена установка NOX как глобальной пользовательской команды через `nox install`;
