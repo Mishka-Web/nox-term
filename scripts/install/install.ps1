@@ -61,7 +61,17 @@ try {
 
     $Version = & $Destination --version
     Write-Host "Installed $Version to $Destination"
-    Write-Host "Run: nox"
+
+    $Resolved = Get-Command nox -ErrorAction SilentlyContinue
+    if ($Resolved) {
+        Write-Host "Command ready: nox"
+        Write-Host "Try: nox --version"
+        Write-Host "Try: nox example.com"
+    }
+    else {
+        Write-Host "NOX was installed, but this PowerShell session did not refresh PATH."
+        Write-Host "Open a new terminal and run: nox"
+    }
 }
 finally {
     Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue

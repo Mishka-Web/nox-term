@@ -1,4 +1,5 @@
 mod cookies;
+mod install;
 mod state;
 mod update;
 
@@ -43,7 +44,6 @@ const TEXT: Color = Color::Rgb(226, 232, 240);
 const MUTED: Color = Color::Rgb(113, 128, 150);
 const ACCENT: Color = Color::Rgb(56, 189, 248);
 const ACCENT_SOFT: Color = Color::Rgb(14, 116, 144);
-const ERROR: Color = Color::Rgb(248, 113, 113);
 
 #[derive(Debug, Clone)]
 struct LinkTarget {
@@ -1162,7 +1162,8 @@ impl App {
         for (form_index, field_index) in refs {
             let field = &self.current_page().forms[form_index].fields[field_index];
             let marker = match field.kind {
-                FormFieldKind::Checkbox | FormFieldKind::Radio => if field.checked { "[x]" } else { "[ ]" },
+                FormFieldKind::Checkbox | FormFieldKind::Radio if field.checked => "[x]",
+                FormFieldKind::Checkbox | FormFieldKind::Radio => "[ ]",
                 FormFieldKind::Select => "[▾]",
                 FormFieldKind::Submit => "[→]",
                 FormFieldKind::Password => "[••]",
@@ -1782,9 +1783,9 @@ fn dump_page(raw: &str) -> Result<()> {
 fn print_cli_help() {
     println!(
         "NOX {} — portable reader-first terminal browser\n\n\
-         USAGE:\n  nox [URL | search query]\n  nox --dump <URL | search query>\n  nox update [--check]\n  nox config --path\n  nox data --path\n  nox cookies clear\n  nox --version\n\n\
+         USAGE:\n  nox [URL | search query]\n  nox --dump <URL | search query>\n  nox install\n  nox uninstall\n  nox update [--check]\n  nox config --path\n  nox data --path\n  nox cookies clear\n  nox --version\n\n\
          TUI ESSENTIALS:\n  Ctrl+T/Ctrl+W   tabs\n  Ctrl+L          address/search\n  m / M           toggle bookmark / bookmarks\n  H               history\n  F               forms\n  R               reader mode\n  Tab             links\n\n\
-         EXAMPLES:\n  nox example.com\n  nox rust terminal browser\n  nox --dump https://example.com\n  nox update --check",
+         EXAMPLES:\n  nox example.com\n  nox rust terminal browser\n  nox --dump https://example.com\n  nox install\n  nox update --check",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -1798,6 +1799,12 @@ fn main() -> Result<()> {
     if matches!(args.first().map(String::as_str), Some("--version" | "-V")) {
         println!("nox {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("install") {
+        return install::install_self();
+    }
+    if args.first().map(String::as_str) == Some("uninstall") {
+        return install::uninstall_self();
     }
     if matches!(args.first().map(String::as_str), Some("update" | "self-update")) {
         let check_only = args.iter().skip(1).any(|arg| arg == "--check" || arg == "-c");

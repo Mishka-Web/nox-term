@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1
+
+- добавлена установка NOX как глобальной пользовательской команды через `nox install`;
+- добавлена команда `nox uninstall`;
+- добавлен `scripts/dev-install.ps1` для локальной Windows-разработки;
+- Windows installer автоматически добавляет NOX в User PATH и обновляет PATH текущего PowerShell;
+- Linux/macOS installer автоматически настраивает shell PATH при необходимости;
+- добавлен `INSTALL.md`;
+- устранены предупреждения `unused import`, `dead_code` и `clippy::collapsible_match`.
+
 ## 0.4.0
 
 ### Browser essentials
