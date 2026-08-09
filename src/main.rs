@@ -2912,7 +2912,7 @@ fn print_cli_help() {
          USAGE:\n  nox [URL | search query]\n  nox search <query>\n  nox --dump <URL | search query>\n  nox doctor\n  nox install\n  nox uninstall\n  nox update [--check]\n  nox config --path\n  nox data --path\n  nox cookies clear\n  nox --version\n\n\
          TUI ESSENTIALS:\n  Ctrl+T/Ctrl+W   tabs\n  Ctrl+L          omnibox\n  s               web search\n  :               command palette\n  g               link hints\n  / · n/N         find · next/previous\n  m / M           toggle bookmark / bookmarks\n  H               history\n  F               forms\n  R               reader mode\n  V               visual mode / image previews\n  Tab             links\n\n\
          SEARCH:\n  ? query         force configured web search\n  !ddg query      DuckDuckGo\n  !g query        Google\n  !gh query       GitHub\n  !w query        Wikipedia\n\n\
-         EXAMPLES:\n  nox example.com\n  nox search rust ratatui\n  nox "!gh ratatui"\n  nox --dump https://example.com\n  nox doctor\n  nox update --check",
+         EXAMPLES:\n  nox example.com\n  nox search rust ratatui\n  nox \"!gh ratatui\"\n  nox --dump https://example.com\n  nox doctor\n  nox update --check",
         env!("CARGO_PKG_VERSION")
     );
 }
