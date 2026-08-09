@@ -1,8 +1,6 @@
-# NOX 0.5 — smoke test
+# NOX 0.6 — smoke test
 
-Перед публикацией релиза выполните проверки на локальной машине.
-
-## 1. Компиляция
+## 1. Toolchain
 
 ```powershell
 cargo check
@@ -10,136 +8,171 @@ cargo test
 cargo clippy
 ```
 
-## 2. Запуск TUI
+`cargo check` должен обновить `Cargo.lock`, поскольку 0.6 добавляет crate `image`.
+
+## 2. Version
 
 ```powershell
-cargo run -- example.com
+cargo run -- --version
 ```
 
-Проверьте прокрутку `j/k`, `b/f`, `r`, `R`, `Tab`, `Ctrl+T`, `Ctrl+W`.
-
-## 3. Omnibox и web search
-
-В TUI нажмите `s`, введите:
+Ожидается:
 
 ```text
-rust ratatui terminal
+nox 0.6.0
 ```
 
-Ожидается открытие результатов поиска.
-
-Затем через `Ctrl+L` проверьте:
-
-```text
-? rust ratatui
-!ddg rust tui
-!g rust tui
-!gh ratatui
-!w Rust
-```
-
-Обычный URL по-прежнему должен открываться напрямую:
-
-```text
-github.com
-```
-
-## 4. Link Hints
-
-На странице со ссылками нажмите `g`.
-
-Ожидается список вида:
-
-```text
-[ 1] ...
-[ 2] ...
-[ 3] ...
-```
-
-Введите номер и `Enter`. Должна открыться соответствующая ссылка.
-
-## 5. Command Palette
-
-Нажмите `:`.
-
-Проверьте фильтрацию, например введите:
-
-```text
-rea
-```
-
-Выберите `reader` и нажмите `Enter`.
-
-Также проверьте `search`, `hints`, `new-tab`, `history`, `bookmarks`.
-
-## 6. Find
-
-Нажмите `/`, введите слово с текущей страницы и `Enter`.
-
-```text
-n   следующее
-N   предыдущее
-```
-
-Footer/status должен показывать позицию вида `2/7`.
-
-## 7. Links
-
-Нажмите `Tab` или `l`.
-
-```text
-Enter   открыть
- t      открыть в новой вкладке
- d      скачать
-```
-
-## 8. CLI search
+## 3. Home
 
 ```powershell
-cargo run -- search rust ratatui
+cargo run
 ```
 
-В non-interactive режиме:
+Проверить:
+
+- header содержит `VISUAL`;
+- `V` переключает `VISUAL ↔ TEXT`;
+- `?` открывает help с Visual Mode.
+
+## 4. Rich content
+
+Открыть страницу со статьёй:
+
+```text
+o
+https://en.wikipedia.org/wiki/Terminal_emulator
+Enter
+```
+
+Проверить:
+
+- заголовки имеют разный стиль;
+- списки выглядят структурированно;
+- таблицы/цитаты/code blocks не сливаются с обычным текстом;
+- `R` меняет Reader/Document;
+- `V` меняет Visual/Text.
+
+## 5. Inline images
+
+На странице с bitmap-картинками должны появиться блоки:
+
+```text
+╭─ IMAGE ...
+│ <color preview>
+╰─ host
+```
+
+Если конкретный ресурс является SVG или блокирует hotlink, NOX должен показать fallback `preview unavailable`, а не падать.
+
+## 6. Direct image document
+
+Проверить прямой URL на PNG/JPEG/WebP/GIF.
+
+Ожидается один визуальный image document с HTTP status и preview.
+
+## 7. Limits
+
+Открыть:
 
 ```powershell
-cargo run -- --dump "? rust ratatui"
+cargo run -- config --path
 ```
 
-## 9. Doctor
+Проверить в `config.toml`:
+
+```toml
+visual_mode = true
+load_images = true
+max_images = 8
+image_width = 48
+image_max_bytes = 2000000
+```
+
+Поставить временно:
+
+```toml
+load_images = false
+```
+
+Перезапустить страницу: должен быть image fallback без скачивания preview.
+
+Вернуть `true`.
+
+## 8. Search + images
+
+На длинной странице с картинками:
+
+```text
+/
+```
+
+Найти слово ниже изображения. Скролл должен прыгнуть ближе к реальному совпадению, учитывая высоту image preview.
+
+Проверить `n` и `N`.
+
+## 9. Navigation regression
+
+Проверить:
+
+```text
+Ctrl+L
+s
+g
+:
+Tab
+Ctrl+T
+Ctrl+W
+b
+f
+r
+R
+m
+M
+H
+F
+```
+
+## 10. Dump
+
+```powershell
+cargo run -- --dump https://en.wikipedia.org/wiki/Terminal_emulator
+```
+
+Не должно быть управляющих `NOXIMG` markers. Вместо них:
+
+```text
+[IMG] ... -> https://...
+```
+
+## 11. Doctor
 
 ```powershell
 cargo run -- doctor
 ```
 
-Ожидаются проверки TTY, data/config, downloads, cookies, HTTPS и executable path.
+Проверить строку `Visual:`.
 
-## 10. Release build
+## 12. Release build
 
 ```powershell
 cargo build --release
 .\target\release\nox.exe --version
 .\target\release\nox.exe doctor
-.\target\release\nox.exe example.com
 ```
 
-Ожидаемая версия:
+## 13. Commit
 
-```text
-nox 0.5.0
-```
-
-## 11. Перед тегом
+После того как `Cargo.lock` обновлён локально:
 
 ```powershell
-git status
 git add .
-git commit -m "feat: NOX 0.5 navigation and search"
+git commit -m "feat: NOX 0.6 visual content and inline images"
 git push origin main
 ```
 
-После успешного CI:
+После зелёного CI:
 
 ```powershell
-git tag v0.5.0
-git push origin v0.5.0
+git tag v0.6.0
+git push origin v0.6.0
 ```

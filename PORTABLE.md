@@ -1,6 +1,6 @@
 # NOX Portable Distribution
 
-NOX 0.5 рассчитан на две модели использования:
+NOX 0.6 рассчитан на две модели использования:
 
 1. установка одной командой;
 2. запуск одиночного portable-бинарника без установки.
@@ -104,8 +104,8 @@ aarch64-unknown-linux-musl
 3. Создать совпадающий тег.
 
 ```bash
-git tag v0.5.0
-git push origin v0.5.0
+git tag v0.6.0
+git push origin v0.6.0
 ```
 
 Release workflow специально завершится ошибкой, если тег и Cargo version отличаются.

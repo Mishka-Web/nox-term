@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0
+
+- добавлен Visual Mode (`V`, `:visual`) с сохранением настройки в `config.toml`;
+- добавлен inline true-color renderer изображений через Unicode half-block `▀`;
+- добавлено декодирование PNG/JPEG/GIF/WebP через Rust `image`;
+- добавлена обработка прямых image URLs как визуальных документов;
+- HTML parser теперь распознаёт `img`, lazy image attributes, `figcaption` и `hr`;
+- добавлены rich styles для headings, lists, blockquotes, code blocks и tables;
+- добавлены лимиты `max_images`, `image_width`, `image_max_bytes`;
+- поиск по странице учитывает высоту inline image previews при jump;
+- `--dump` преобразует image markers в читаемые `[IMG] alt -> URL`;
+- `nox doctor` показывает visual/image configuration;
+- добавлен `VISUAL.md`;
+- версия проекта поднята до 0.6.0.
+
 ## 0.5.0
 
 - новый omnibox с явным `? query` и search aliases `!ddg`, `!g`, `!gh`, `!w`;

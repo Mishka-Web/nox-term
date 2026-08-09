@@ -1,113 +1,35 @@
-# NOX 0.5 — использование
+# NOX 0.6 — использование
 
 ## Запуск
 
 ```bash
 nox
 nox example.com
+nox "rust terminal browser"
 ```
 
-## Omnibox
+## Visual Mode
 
-Откройте `Ctrl+L` или `o`. Быстрый веб-поиск: `s`.
-
-URL:
+По умолчанию включён.
 
 ```text
-github.com
-https://example.com
-localhost:5173
+V
 ```
 
-Обычный текст автоматически становится поисковым запросом:
+Переключает:
 
 ```text
-rust terminal browser
+VISUAL ↔ TEXT
 ```
 
-Принудительный поиск:
+Visual Mode показывает rich-content и bitmap previews изображений.
 
-```text
-? rust terminal browser
-```
+## Проверка картинки напрямую
 
-Shortcuts:
-
-```text
-!ddg query   DuckDuckGo
-!d query     DuckDuckGo
-!g query     Google
-!gh query    GitHub
-!w query     Wikipedia
-```
-
-CLI:
+Откройте HTTP/HTTPS URL на PNG/JPEG/WebP/GIF:
 
 ```bash
-nox search rust ratatui
-```
-
-## Command Palette
-
-Нажмите `:`.
-
-Начните вводить название команды, используйте `↑/↓`, затем `Enter`.
-
-Доступны:
-
-```text
-open, search, find, hints, links,
-new-tab, close-tab, reload, back, forward,
-reader, bookmarks, history, forms,
-home, help, quit
-```
-
-## Link Hints
-
-Нажмите `g`.
-
-Введите номер ссылки и `Enter`.
-
-Пример:
-
-```text
-[ 1] Documentation
-[ 2] GitHub
-[ 3] Download
-```
-
-Введите `2` + `Enter`.
-
-## Links
-
-`Tab` или `l`:
-
-```text
-j/k       выбрать
-Enter     открыть
- t        открыть в новой вкладке
- d        скачать
-Esc       закрыть
-```
-
-## Поиск по странице
-
-```text
-/     начать поиск
-n     следующее совпадение
-N     предыдущее совпадение
-```
-
-NOX показывает номер текущего совпадения, например `2/7`.
-
-## Вкладки
-
-```text
-Ctrl+T       новая
-Ctrl+W       закрыть
-Ctrl+Tab     следующая
-Shift+Tab    предыдущая
-Alt+1..9     выбрать по номеру
+nox https://example.org/photo.jpg
 ```
 
 ## Reader Mode
@@ -116,50 +38,105 @@ Alt+1..9     выбрать по номеру
 R
 ```
 
-## Закладки и история
+Reader Mode и Visual Mode независимы.
+
+## Навигация
 
 ```text
-m     добавить/удалить bookmark
-M     bookmarks
-H     history
+Ctrl+L / o   omnibox
+s            web search
+g            link hints
+Tab / l      links
+b / f        back / forward
+r            reload
+Ctrl+T       new tab
+Ctrl+W       close tab
+Ctrl+Tab     next tab
 ```
 
-## Формы
+## Поиск
 
 ```text
-F
+/            find on page
+n            next
+N            previous
 ```
 
-Поддерживаются text/password/textarea/checkbox/radio/select/submit и GET/POST urlencoded forms.
+## Search aliases
 
-## Dump mode
+```text
+? query
+!ddg query
+!g query
+!gh query
+!w query
+```
+
+## Command Palette
+
+```text
+:
+```
+
+В том числе:
+
+```text
+visual
+reader
+open
+search
+find
+hints
+links
+bookmarks
+history
+forms
+```
+
+## Config
+
+```bash
+nox config --path
+```
+
+Visual settings:
+
+```toml
+visual_mode = true
+load_images = true
+max_images = 8
+image_width = 48
+image_max_bytes = 2000000
+```
+
+Если страницы грузятся слишком долго из-за изображений:
+
+```toml
+max_images = 3
+```
+
+или:
+
+```toml
+load_images = false
+```
+
+## Dump
 
 ```bash
 nox --dump example.com
-nox --dump example.com > page.txt
 ```
 
-## Диагностика
+Картинки выводятся текстом:
+
+```text
+[IMG] description -> https://...
+```
+
+## Doctor
 
 ```bash
 nox doctor
 ```
 
-## Обновление
-
-```bash
-nox update --check
-nox update
-```
-
-## Справка
-
-```bash
-nox --help
-```
-
-В TUI:
-
-```text
-?
-```
+0.6 также показывает текущие visual/image настройки.

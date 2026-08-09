@@ -7,7 +7,7 @@ use std::{
     collections::HashSet,
     env,
     fs,
-    io::{self, IsTerminal},
+    io::{self, IsTerminal, Read},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -29,7 +29,7 @@ use ratatui::{
 };
 use reqwest::{
     blocking::{Client, RequestBuilder, Response},
-    header::{CONTENT_DISPOSITION, CONTENT_TYPE},
+    header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, REFERER},
     redirect::Policy,
 };
 use scraper::{ElementRef, Html, Selector};
@@ -44,6 +44,39 @@ const TEXT: Color = Color::Rgb(226, 232, 240);
 const MUTED: Color = Color::Rgb(113, 128, 150);
 const ACCENT: Color = Color::Rgb(56, 189, 248);
 const ACCENT_SOFT: Color = Color::Rgb(14, 116, 144);
+const SURFACE: Color = Color::Rgb(12, 16, 22);
+const CODE_BG: Color = Color::Rgb(9, 22, 30);
+const QUOTE_BG: Color = Color::Rgb(14, 20, 28);
+const IMAGE_MARKER_PREFIX: &str = "\u{001e}NOXIMG:";
+const HR_MARKER: &str = "\u{001e}NOXHR";
+
+
+#[derive(Debug, Clone)]
+struct PageImage {
+    alt: String,
+    url: Url,
+    pixel_width: u32,
+    pixel_height: u32,
+    rgb: Vec<u8>,
+    error: Option<String>,
+}
+
+impl PageImage {
+    fn pending(alt: String, url: Url) -> Self {
+        Self {
+            alt,
+            url,
+            pixel_width: 0,
+            pixel_height: 0,
+            rgb: Vec::new(),
+            error: None,
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        self.pixel_width > 0 && self.pixel_height > 0 && !self.rgb.is_empty()
+    }
+}
 
 #[derive(Debug, Clone)]
 struct LinkTarget {
@@ -89,6 +122,7 @@ struct Page {
     lines: Vec<String>,
     links: Vec<LinkTarget>,
     forms: Vec<PageForm>,
+    images: Vec<PageImage>,
     status_code: Option<u16>,
     raw_html: Option<String>,
     reader_mode: bool,
@@ -151,6 +185,7 @@ enum CommandAction {
     Back,
     Forward,
     Reader,
+    Visual,
     Bookmarks,
     History,
     Forms,
@@ -178,6 +213,7 @@ const PALETTE_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand { name: "back", description: "назад", action: CommandAction::Back },
     PaletteCommand { name: "forward", description: "вперёд", action: CommandAction::Forward },
     PaletteCommand { name: "reader", description: "переключить Reader Mode", action: CommandAction::Reader },
+    PaletteCommand { name: "visual", description: "переключить Visual Mode с изображениями", action: CommandAction::Visual },
     PaletteCommand { name: "bookmarks", description: "открыть закладки", action: CommandAction::Bookmarks },
     PaletteCommand { name: "history", description: "открыть историю", action: CommandAction::History },
     PaletteCommand { name: "forms", description: "открыть формы страницы", action: CommandAction::Forms },
@@ -199,6 +235,8 @@ struct App {
     mode: Mode,
     running: bool,
     viewport_height: u16,
+    viewport_width: u16,
+    rendered_height: usize,
 
     input: String,
     input_cursor: usize,
@@ -232,6 +270,8 @@ impl App {
             mode: Mode::Normal,
             running: true,
             viewport_height: 1,
+            viewport_width: 80,
+            rendered_height: 1,
             input: String::new(),
             input_cursor: 0,
             link_state: ListState::default(),
@@ -361,7 +401,7 @@ impl App {
     fn navigate_url(&mut self, target: Url, push_history: bool) {
         self.status = format!("Открываю {}", target.host_str().unwrap_or(target.as_str()));
         let reader_mode = self.config.reader_mode;
-        let page = match fetch_page(&self.client, target.clone(), reader_mode) {
+        let page = match fetch_page(&self.client, target.clone(), &self.config, reader_mode) {
             Ok(page) => page,
             Err(err) => {
                 self.status = format!("Ошибка: {err:#}");
@@ -375,6 +415,7 @@ impl App {
         let status_code = page.status_code;
         let links = page.links.len();
         let forms = page.forms.len();
+        let images = page.images.len();
         let visit = page.url.as_ref().map(|url| HistoryEntry {
             title: page.title.clone(),
             url: url.as_str().to_string(),
@@ -405,8 +446,8 @@ impl App {
         self.mode = Mode::Normal;
         self.reset_view();
         self.status = match status_code {
-            Some(code) => format!("HTTP {code} · {links} ссылок · {forms} форм"),
-            None => format!("{links} ссылок · {forms} форм"),
+            Some(code) => format!("HTTP {code} · {links} ссылок · {images} img · {forms} форм"),
+            None => format!("{links} ссылок · {images} img · {forms} форм"),
         };
     }
 
@@ -574,6 +615,7 @@ impl App {
             CommandAction::Back => self.go_back(),
             CommandAction::Forward => self.go_forward(),
             CommandAction::Reader => self.toggle_reader_mode(),
+            CommandAction::Visual => self.toggle_visual_mode(),
             CommandAction::Bookmarks => self.open_bookmarks(),
             CommandAction::History => self.open_history_panel(),
             CommandAction::Forms => self.open_forms(),
@@ -654,7 +696,14 @@ impl App {
             return;
         };
         let reader_mode = !page.reader_mode;
-        let rebuilt = parse_html_page(url, page.status_code.unwrap_or(200), html, reader_mode);
+        let mut rebuilt = parse_html_page(
+            url,
+            page.status_code.unwrap_or(200),
+            html,
+            reader_mode,
+            self.config.max_images,
+        );
+        hydrate_page_images(&self.client, &mut rebuilt, &self.config);
         let index = self.tab().history_index;
         self.tabs[self.active_tab].pages[index] = rebuilt;
         self.reset_view();
@@ -662,6 +711,29 @@ impl App {
             "Reader mode включён".to_string()
         } else {
             "Reader mode выключен".to_string()
+        };
+    }
+
+    fn toggle_visual_mode(&mut self) {
+        self.config.visual_mode = !self.config.visual_mode;
+        let enabled = self.config.visual_mode;
+        let _ = state::save_config(&self.paths, &self.config);
+
+        if enabled && self.config.load_images {
+            let mut page = self.current_page().clone();
+            if page.images.iter().any(|image| !image.is_ready()) {
+                self.status = "Visual Mode · загружаю изображения…".to_string();
+                hydrate_page_images(&self.client, &mut page, &self.config);
+                let index = self.tab().history_index;
+                self.tabs[self.active_tab].pages[index] = page;
+            }
+        }
+
+        self.tab_mut().scroll = 0;
+        self.status = if enabled {
+            "Visual Mode включён · изображения и rich-content активны".to_string()
+        } else {
+            "Visual Mode выключен · компактный текстовый рендер".to_string()
         };
     }
 
@@ -746,7 +818,7 @@ impl App {
             return;
         };
         self.status = format!("Отправляю {} {}", form.method, form.action);
-        let result = fetch_form(&self.client, &form, submit_field, self.config.reader_mode);
+        let result = fetch_form(&self.client, &form, submit_field, &self.config, self.config.reader_mode);
         match result {
             Ok(page) => self.install_page(page, true, true),
             Err(err) => self.status = format!("Ошибка формы: {err:#}"),
@@ -754,7 +826,7 @@ impl App {
     }
 
     fn max_scroll(&self) -> u16 {
-        let total = self.current_page().lines.len();
+        let total = self.rendered_height.max(self.current_page().lines.len());
         let visible = self.viewport_height.max(1) as usize;
         total.saturating_sub(visible).min(u16::MAX as usize) as u16
     }
@@ -913,9 +985,15 @@ impl App {
         let query = self.tab().search_query.clone();
         let position = matches.iter().position(|candidate| *candidate == index).unwrap_or(0) + 1;
         let total = matches.len();
+        let visual_scroll = rendered_offset_for_source(
+            self.current_page(),
+            self.viewport_width,
+            self.config.visual_mode,
+            index,
+        );
         let tab = self.tab_mut();
         tab.match_line = Some(index);
-        tab.scroll = index.min(u16::MAX as usize) as u16;
+        tab.scroll = visual_scroll.min(u16::MAX as usize) as u16;
         self.status = format!("«{query}» · {position}/{total} · n/N следующее/предыдущее");
     }
 
@@ -991,6 +1069,7 @@ impl App {
             KeyCode::Char('f') | KeyCode::Char(']') => self.go_forward(),
             KeyCode::Char('r') => self.reload(),
             KeyCode::Char('R') => self.toggle_reader_mode(),
+            KeyCode::Char('V') => self.toggle_visual_mode(),
             KeyCode::Char('n') => self.find_next(),
             KeyCode::Char('N') => self.find_previous(),
             KeyCode::Char('m') => self.toggle_bookmark(),
@@ -1265,14 +1344,23 @@ impl App {
             .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(3)])
             .areas(area);
 
+        let page = self.current_page();
+        let ready_images = page.images.iter().filter(|image| image.is_ready()).count();
+        let visual_chip = if self.config.visual_mode { " VISUAL " } else { " TEXT " };
         let brand = Line::from(vec![
             Span::styled(" NOX ", Style::default().fg(BG).bg(ACCENT).add_modifier(Modifier::BOLD)),
             Span::styled(
-                format!("  {}", self.current_page().title),
+                visual_chip,
+                Style::default().fg(if self.config.visual_mode { Color::Rgb(167, 243, 208) } else { MUTED })
+                    .bg(SURFACE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", page.title),
                 Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("   {} cookies", self.cookies.count()),
+                format!("   {} img · {} links · {} cookies", ready_images, page.links.len(), self.cookies.count()),
                 Style::default().fg(MUTED),
             ),
         ]);
@@ -1339,25 +1427,28 @@ impl App {
 
     fn draw_reader(&mut self, frame: &mut Frame, area: Rect) {
         self.viewport_height = area.height.saturating_sub(2).max(1);
+        self.viewport_width = area.width.saturating_sub(4).max(8);
         let match_line = self.tab().match_line;
-        let mut rendered = Vec::with_capacity(self.current_page().lines.len());
-        for (index, line) in self.current_page().lines.iter().enumerate() {
-            rendered.push(style_reader_line(line, match_line == Some(index)));
-        }
+        let visual = self.config.visual_mode;
+        let content_width = self.viewport_width;
+        let mut rendered = render_document_lines(self.current_page(), content_width, visual, match_line);
         if rendered.is_empty() {
             rendered.push(Line::from(Span::styled("Пустая страница", Style::default().fg(MUTED))));
         }
+        self.rendered_height = rendered.len();
+
         let page = self.current_page();
         let mode = if page.reader_mode { "READER" } else { "DOCUMENT" };
+        let presentation = if visual { "VISUAL" } else { "TEXT" };
         let title = match page.status_code {
-            Some(code) => format!(" {mode} · HTTP {code} "),
-            None => format!(" {mode} "),
+            Some(code) => format!(" {mode} · {presentation} · HTTP {code} "),
+            None => format!(" {mode} · {presentation} "),
         };
         let block = Block::default()
-            .title(Span::styled(title, Style::default().fg(MUTED)))
+            .title(Span::styled(title, Style::default().fg(if visual { ACCENT } else { MUTED })))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(38, 45, 57)))
+            .border_style(Style::default().fg(if visual { ACCENT_SOFT } else { Color::Rgb(38, 45, 57) }))
             .style(Style::default().bg(BG));
         let paragraph = Paragraph::new(rendered)
             .style(Style::default().fg(TEXT).bg(BG))
@@ -1551,7 +1642,7 @@ impl App {
             (u32::from(self.tab().scroll) * 100 / u32::from(max_scroll)).min(100)
         };
         let hints = match self.mode {
-            Mode::Normal => format!("{progress:>3}% · s search · g hints · : commands · / find · ? help"),
+            Mode::Normal => format!("{progress:>3}% · V visual · s search · g hints · : commands · / find · ? help"),
             Mode::Address => "Enter open · ? query · !gh/!w/!g/!ddg · Esc".to_string(),
             Mode::Search => "Enter find · n next · N previous · Esc".to_string(),
             Mode::Links => "j/k select · Enter open · t new tab · d download · Esc".to_string(),
@@ -1590,6 +1681,7 @@ impl App {
             help_row("Alt+1..9", "переключиться на вкладку"),
             help_row("b / f", "назад / вперёд"),
             help_row("r / R", "reload / Reader mode"),
+            help_row("V", "Visual Mode: изображения + rich-content"),
             help_row("m / M", "bookmark / список закладок"),
             help_row("H", "общая история"),
             help_row("F", "формы текущей страницы"),
@@ -1598,7 +1690,7 @@ impl App {
             help_row("q / Ctrl+C", "выход"),
             Line::from(""),
             Line::from(Span::styled(
-                "NOX 0.5: omnibox, search aliases, command palette, link hints и улучшенный find.",
+                "NOX 0.6: Visual Mode, inline image previews, rich-content, omnibox и keyboard navigation.",
                 Style::default().fg(MUTED),
             )),
             Line::from(Span::styled(
@@ -1611,7 +1703,7 @@ impl App {
             )),
         ];
         frame.render_widget(
-            Paragraph::new(lines).style(Style::default().fg(TEXT).bg(PANEL)).block(modal_block(" NOX 0.5 · KEYBOARD ")),
+            Paragraph::new(lines).style(Style::default().fg(TEXT).bg(PANEL)).block(modal_block(" NOX 0.6 · KEYBOARD ")),
             modal,
         );
     }
@@ -1627,7 +1719,7 @@ fn build_client(config: &AppConfig, cookies: Arc<PersistentCookieStore>) -> Resu
         .context("не удалось создать HTTP-клиент")
 }
 
-fn fetch_page(client: &Client, url: Url, reader_mode: bool) -> Result<Page> {
+fn fetch_page(client: &Client, url: Url, config: &AppConfig, reader_mode: bool) -> Result<Page> {
     if !matches!(url.scheme(), "http" | "https") {
         anyhow::bail!("поддерживаются только HTTP и HTTPS");
     }
@@ -1635,10 +1727,16 @@ fn fetch_page(client: &Client, url: Url, reader_mode: bool) -> Result<Page> {
         .get(url.clone())
         .send()
         .with_context(|| format!("не удалось загрузить {url}"))?;
-    response_to_page(response, reader_mode)
+    response_to_page(client, response, config, reader_mode)
 }
 
-fn fetch_form(client: &Client, form: &PageForm, submit_field: Option<usize>, reader_mode: bool) -> Result<Page> {
+fn fetch_form(
+    client: &Client,
+    form: &PageForm,
+    submit_field: Option<usize>,
+    config: &AppConfig,
+    reader_mode: bool,
+) -> Result<Page> {
     let pairs = form_pairs(form, submit_field);
     let request: RequestBuilder = if form.method.eq_ignore_ascii_case("POST") {
         let body = form_urlencoded::Serializer::new(String::new())
@@ -1650,14 +1748,21 @@ fn fetch_form(client: &Client, form: &PageForm, submit_field: Option<usize>, rea
             .body(body)
     } else {
         let mut target = form.action.clone();
-        target.query_pairs_mut().extend_pairs(pairs.iter().map(|(key, value)| (key.as_str(), value.as_str())));
+        target
+            .query_pairs_mut()
+            .extend_pairs(pairs.iter().map(|(key, value)| (key.as_str(), value.as_str())));
         client.get(target)
     };
     let response = request.send().context("не удалось отправить форму")?;
-    response_to_page(response, reader_mode)
+    response_to_page(client, response, config, reader_mode)
 }
 
-fn response_to_page(response: Response, reader_mode: bool) -> Result<Page> {
+fn response_to_page(
+    client: &Client,
+    response: Response,
+    config: &AppConfig,
+    reader_mode: bool,
+) -> Result<Page> {
     let status = response.status().as_u16();
     let final_url = response.url().clone();
     let content_type = response
@@ -1680,9 +1785,40 @@ fn response_to_page(response: Response, reader_mode: bool) -> Result<Page> {
             lines: pretty.lines().map(|line| format!("    {line}")).collect(),
             links: Vec::new(),
             forms: Vec::new(),
+            images: Vec::new(),
             status_code: Some(status),
             raw_html: None,
             reader_mode: false,
+        });
+    }
+
+    if content_type.starts_with("image/") {
+        let max_bytes = config.image_max_bytes.clamp(64 * 1024, 8 * 1024 * 1024);
+        if response_declared_too_large(&response, max_bytes) {
+            return Ok(image_document_page(
+                final_url,
+                status,
+                None,
+                Some(format!("изображение больше лимита {} KB", max_bytes / 1024)),
+            ));
+        }
+        let mut bytes = Vec::new();
+        response
+            .take(max_bytes as u64 + 1)
+            .read_to_end(&mut bytes)
+            .context("не удалось прочитать изображение")?;
+        if bytes.len() > max_bytes {
+            return Ok(image_document_page(
+                final_url,
+                status,
+                None,
+                Some(format!("изображение больше лимита {} KB", max_bytes / 1024)),
+            ));
+        }
+        let preview = decode_image_preview(&bytes, config);
+        return Ok(match preview {
+            Ok(preview) => image_document_page(final_url, status, Some(preview), None),
+            Err(err) => image_document_page(final_url, status, None, Some(short_error(&err))),
         });
     }
 
@@ -1704,6 +1840,7 @@ fn response_to_page(response: Response, reader_mode: bool) -> Result<Page> {
             ],
             links: Vec::new(),
             forms: Vec::new(),
+            images: Vec::new(),
             status_code: Some(status),
             raw_html: None,
             reader_mode: false,
@@ -1713,7 +1850,9 @@ fn response_to_page(response: Response, reader_mode: bool) -> Result<Page> {
     let body = response.text().context("не удалось прочитать тело ответа")?;
     if content_type.contains("text/plain") {
         let mut lines: Vec<String> = body.lines().map(ToString::to_string).collect();
-        if lines.is_empty() { lines.push(String::new()); }
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
         return Ok(Page {
             title: final_url.host_str().unwrap_or("Текстовый документ").to_string(),
             display_url: final_url.as_str().to_string(),
@@ -1721,16 +1860,31 @@ fn response_to_page(response: Response, reader_mode: bool) -> Result<Page> {
             lines,
             links: Vec::new(),
             forms: Vec::new(),
+            images: Vec::new(),
             status_code: Some(status),
             raw_html: None,
             reader_mode: false,
         });
     }
 
-    Ok(parse_html_page(final_url, status, &body, reader_mode))
+    let mut page = parse_html_page(
+        final_url,
+        status,
+        &body,
+        reader_mode,
+        config.max_images,
+    );
+    hydrate_page_images(client, &mut page, config);
+    Ok(page)
 }
 
-fn parse_html_page(url: Url, status: u16, html: &str, reader_mode: bool) -> Page {
+fn parse_html_page(
+    url: Url,
+    status: u16,
+    html: &str,
+    reader_mode: bool,
+    max_images: usize,
+) -> Page {
     let document = Html::parse_document(html);
     let title_selector = Selector::parse("title").expect("valid selector");
     let link_selector = Selector::parse("a[href]").expect("valid selector");
@@ -1755,11 +1909,16 @@ fn parse_html_page(url: Url, status: u16, html: &str, reader_mode: bool) -> Page
         document.select(&body_selector).next()
     };
 
-    let mut lines = root.map(collect_content_lines).unwrap_or_default();
+    let mut images = Vec::new();
+    let mut lines = root
+        .map(|root| collect_content_lines(root, &url, max_images.min(24), &mut images))
+        .unwrap_or_default();
     if lines.is_empty() {
         if let Some(body) = document.select(&body_selector).next() {
             let text = normalize_ws(&body.text().collect::<Vec<_>>().join(" "));
-            if !text.is_empty() { lines.push(text); }
+            if !text.is_empty() {
+                lines.push(text);
+            }
         }
     }
     if lines.is_empty() {
@@ -1769,16 +1928,30 @@ fn parse_html_page(url: Url, status: u16, html: &str, reader_mode: bool) -> Page
     let mut links = Vec::new();
     let mut seen = HashSet::new();
     for element in document.select(&link_selector) {
-        let Some(href) = element.value().attr("href") else { continue; };
-        if href.starts_with('#') || href.starts_with("javascript:") || href.starts_with("mailto:") || href.starts_with("tel:") {
+        let Some(href) = element.value().attr("href") else {
+            continue;
+        };
+        if href.starts_with('#')
+            || href.starts_with("javascript:")
+            || href.starts_with("mailto:")
+            || href.starts_with("tel:")
+        {
             continue;
         }
-        let Ok(target) = url.join(href) else { continue; };
-        if !matches!(target.scheme(), "http" | "https") { continue; }
-        if !seen.insert(target.as_str().to_string()) { continue; }
+        let Ok(target) = url.join(href) else {
+            continue;
+        };
+        if !matches!(target.scheme(), "http" | "https") {
+            continue;
+        }
+        if !seen.insert(target.as_str().to_string()) {
+            continue;
+        }
         let label = normalize_ws(&element.text().collect::<Vec<_>>().join(" "));
         links.push(LinkTarget { label, url: target });
-        if links.len() >= 500 { break; }
+        if links.len() >= 500 {
+            break;
+        }
     }
 
     let forms = extract_forms(&document, &url);
@@ -1794,22 +1967,37 @@ fn parse_html_page(url: Url, status: u16, html: &str, reader_mode: bool) -> Page
         lines,
         links,
         forms,
+        images,
         status_code: Some(status),
         raw_html: Some(html.to_string()),
         reader_mode,
     }
 }
 
-fn collect_content_lines(root: ElementRef<'_>) -> Vec<String> {
-    let selector = Selector::parse("h1,h2,h3,h4,h5,h6,p,li,pre,blockquote,table").expect("valid selector");
+fn collect_content_lines(
+    root: ElementRef<'_>,
+    base: &Url,
+    max_images: usize,
+    images: &mut Vec<PageImage>,
+) -> Vec<String> {
+    let selector = Selector::parse(
+        "h1,h2,h3,h4,h5,h6,p,li,pre,blockquote,table,img,figcaption,hr",
+    )
+    .expect("valid selector");
     let mut lines = Vec::new();
+
     for element in root.select(&selector) {
         let tag = element.value().name();
         if tag == "pre" {
             let raw = element.text().collect::<Vec<_>>().join("");
             let raw = raw.trim_matches('\n');
-            if raw.is_empty() { continue; }
-            for line in raw.lines() { lines.push(format!("    {}", line.trim_end())); }
+            if raw.is_empty() {
+                continue;
+            }
+            push_blank(&mut lines);
+            for line in raw.lines() {
+                lines.push(format!("    {}", line.trim_end()));
+            }
             push_blank(&mut lines);
             continue;
         }
@@ -1817,20 +2005,229 @@ fn collect_content_lines(root: ElementRef<'_>) -> Vec<String> {
             render_table(element, &mut lines);
             continue;
         }
+        if tag == "hr" {
+            push_blank(&mut lines);
+            lines.push(HR_MARKER.to_string());
+            push_blank(&mut lines);
+            continue;
+        }
+        if tag == "img" {
+            if images.len() >= max_images {
+                continue;
+            }
+            let attrs = element.value();
+            let mut source = attrs
+                .attr("data-src")
+                .or_else(|| attrs.attr("data-lazy-src"))
+                .or_else(|| attrs.attr("data-original"))
+                .or_else(|| attrs.attr("src"))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if source.is_empty() || source.starts_with("data:") {
+                if let Some(srcset) = attrs.attr("srcset") {
+                    source = srcset
+                        .split(',')
+                        .next()
+                        .and_then(|candidate| candidate.split_whitespace().next())
+                        .unwrap_or("")
+                        .to_string();
+                }
+            }
+            if source.is_empty() || source.starts_with("data:") {
+                continue;
+            }
+            let Ok(target) = base.join(&source) else {
+                continue;
+            };
+            if !matches!(target.scheme(), "http" | "https") {
+                continue;
+            }
+            let alt = normalize_ws(attrs.attr("alt").unwrap_or(""));
+            let index = if let Some(index) = images.iter().position(|image| image.url == target) {
+                index
+            } else {
+                let index = images.len();
+                images.push(PageImage::pending(alt.clone(), target));
+                index
+            };
+            push_blank(&mut lines);
+            lines.push(format!("{IMAGE_MARKER_PREFIX}{index}"));
+            push_blank(&mut lines);
+            continue;
+        }
+
         let text = normalize_ws(&element.text().collect::<Vec<_>>().join(" "));
-        if text.is_empty() { continue; }
+        if text.is_empty() {
+            continue;
+        }
         match tag {
-            "h1" => { push_blank(&mut lines); lines.push(format!("# {text}")); push_blank(&mut lines); }
-            "h2" => { push_blank(&mut lines); lines.push(format!("## {text}")); push_blank(&mut lines); }
-            "h3" | "h4" | "h5" | "h6" => { push_blank(&mut lines); lines.push(format!("### {text}")); }
+            "h1" => {
+                push_blank(&mut lines);
+                lines.push(format!("# {text}"));
+                push_blank(&mut lines);
+            }
+            "h2" => {
+                push_blank(&mut lines);
+                lines.push(format!("## {text}"));
+                push_blank(&mut lines);
+            }
+            "h3" | "h4" | "h5" | "h6" => {
+                push_blank(&mut lines);
+                lines.push(format!("### {text}"));
+            }
             "li" => lines.push(format!("• {text}")),
-            "blockquote" => { lines.push(format!("│ {text}")); push_blank(&mut lines); }
-            "p" => { lines.push(text); push_blank(&mut lines); }
+            "blockquote" => {
+                lines.push(format!("│ {text}"));
+                push_blank(&mut lines);
+            }
+            "figcaption" => {
+                lines.push(format!("◇ {text}"));
+                push_blank(&mut lines);
+            }
+            "p" => {
+                lines.push(text);
+                push_blank(&mut lines);
+            }
             _ => lines.push(text),
         }
     }
-    while lines.last().is_some_and(|line| line.is_empty()) { lines.pop(); }
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
     lines
+}
+
+fn hydrate_page_images(client: &Client, page: &mut Page, config: &AppConfig) {
+    if !config.visual_mode || !config.load_images || page.images.is_empty() {
+        return;
+    }
+    let referer = page.url.as_ref().map(|url| url.as_str().to_string());
+    for image in &mut page.images {
+        match download_page_image(client, image.url.clone(), referer.as_deref(), config) {
+            Ok((width, height, rgb)) => {
+                image.pixel_width = width;
+                image.pixel_height = height;
+                image.rgb = rgb;
+                image.error = None;
+            }
+            Err(err) => {
+                image.error = Some(short_error(&err));
+            }
+        }
+    }
+}
+
+fn download_page_image(
+    client: &Client,
+    url: Url,
+    referer: Option<&str>,
+    config: &AppConfig,
+) -> Result<(u32, u32, Vec<u8>)> {
+    let mut request = client.get(url.clone()).timeout(Duration::from_secs(4));
+    if let Some(referer) = referer {
+        request = request.header(REFERER, referer);
+    }
+    let response = request
+        .send()
+        .with_context(|| format!("не удалось загрузить изображение {url}"))?;
+    if !response.status().is_success() {
+        anyhow::bail!("HTTP {}", response.status().as_u16());
+    }
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !content_type.is_empty() && !content_type.starts_with("image/") {
+        anyhow::bail!("ресурс не является изображением ({content_type})");
+    }
+
+    let max_bytes = config.image_max_bytes.clamp(64 * 1024, 8 * 1024 * 1024);
+    if response_declared_too_large(&response, max_bytes) {
+        anyhow::bail!("изображение больше лимита {} KB", max_bytes / 1024);
+    }
+
+    let mut bytes = Vec::new();
+    response
+        .take(max_bytes as u64 + 1)
+        .read_to_end(&mut bytes)
+        .context("не удалось прочитать изображение")?;
+    if bytes.len() > max_bytes {
+        anyhow::bail!("изображение больше лимита {} KB", max_bytes / 1024);
+    }
+
+    decode_image_preview(&bytes, config)
+}
+
+fn decode_image_preview(bytes: &[u8], config: &AppConfig) -> Result<(u32, u32, Vec<u8>)> {
+    let decoded = image::load_from_memory(bytes).context("неподдерживаемый формат изображения")?;
+    let max_width = config.image_width.clamp(12, 80);
+    let thumbnail = decoded.thumbnail(max_width, max_width);
+    let width = thumbnail.width();
+    let height = thumbnail.height();
+    let rgba = thumbnail.to_rgba8();
+    let mut rgb = Vec::with_capacity((width * height * 3) as usize);
+    for pixel in rgba.pixels() {
+        let alpha = u16::from(pixel[3]);
+        let inv = 255 - alpha;
+        rgb.push(((u16::from(pixel[0]) * alpha + 5 * inv) / 255) as u8);
+        rgb.push(((u16::from(pixel[1]) * alpha + 8 * inv) / 255) as u8);
+        rgb.push(((u16::from(pixel[2]) * alpha + 12 * inv) / 255) as u8);
+    }
+    Ok((width, height, rgb))
+}
+
+fn response_declared_too_large(response: &Response, max_bytes: usize) -> bool {
+    response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|length| length > max_bytes as u64)
+}
+
+fn image_document_page(
+    url: Url,
+    status: u16,
+    preview: Option<(u32, u32, Vec<u8>)>,
+    error: Option<String>,
+) -> Page {
+    let title = url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Image")
+        .to_string();
+    let mut image = PageImage::pending(title.clone(), url.clone());
+    if let Some((width, height, rgb)) = preview {
+        image.pixel_width = width;
+        image.pixel_height = height;
+        image.rgb = rgb;
+    }
+    image.error = error;
+    Page {
+        title,
+        display_url: url.as_str().to_string(),
+        url: Some(url),
+        lines: vec![format!("{IMAGE_MARKER_PREFIX}0")],
+        links: Vec::new(),
+        forms: Vec::new(),
+        images: vec![image],
+        status_code: Some(status),
+        raw_html: None,
+        reader_mode: false,
+    }
+}
+
+fn short_error(err: &anyhow::Error) -> String {
+    let text = format!("{err:#}");
+    if text.chars().count() > 72 {
+        format!("{}…", text.chars().take(71).collect::<String>())
+    } else {
+        text
+    }
 }
 
 fn render_table(table: ElementRef<'_>, lines: &mut Vec<String>) {
@@ -2050,10 +2447,11 @@ fn home_page() -> Page {
         status_code: None,
         links: Vec::new(),
         forms: Vec::new(),
+        images: Vec::new(),
         raw_html: None,
         reader_mode: true,
         lines: vec![
-            "# NOX 0.5".to_string(),
+            "# NOX 0.6".to_string(),
             String::new(),
             "Terminal-first web browser for navigation, reading and developer workflows.".to_string(),
             String::new(),
@@ -2063,6 +2461,7 @@ fn home_page() -> Page {
             "Ctrl+T — новая вкладка       Tab — список ссылок".to_string(),
             "m / M — bookmark / bookmarks H — история".to_string(),
             "F — формы                    R — Reader mode".to_string(),
+            "V — Visual Mode              true-color image previews".to_string(),
             "? — все клавиши".to_string(),
             String::new(),
             "Search: обычный текст · ? forced search · !gh · !w · !g · !ddg".to_string(),
@@ -2080,6 +2479,7 @@ fn error_page(target: Url, err: &anyhow::Error) -> Page {
         status_code: None,
         links: Vec::new(),
         forms: Vec::new(),
+        images: Vec::new(),
         raw_html: None,
         reader_mode: true,
         lines: vec![
@@ -2090,6 +2490,233 @@ fn error_page(target: Url, err: &anyhow::Error) -> Page {
             "Проверьте адрес, подключение или повторите клавишей r.".to_string(),
         ],
     }
+}
+
+fn render_document_lines(
+    page: &Page,
+    width: u16,
+    visual: bool,
+    match_line: Option<usize>,
+) -> Vec<Line<'static>> {
+    let mut rendered = Vec::new();
+    for (index, source) in page.lines.iter().enumerate() {
+        if source == HR_MARKER {
+            let count = usize::from(width.saturating_sub(2).max(4));
+            rendered.push(Line::from(Span::styled(
+                "─".repeat(count),
+                Style::default().fg(Color::Rgb(42, 54, 68)).bg(BG),
+            )));
+            continue;
+        }
+        if let Some(raw_index) = source.strip_prefix(IMAGE_MARKER_PREFIX) {
+            let image_index = raw_index.parse::<usize>().unwrap_or(usize::MAX);
+            if let Some(image) = page.images.get(image_index) {
+                if visual {
+                    render_inline_image(image, width, &mut rendered);
+                } else {
+                    let alt = if image.alt.is_empty() { "image" } else { &image.alt };
+                    rendered.push(Line::from(vec![
+                        Span::styled("[IMG] ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+                        Span::styled(alt.to_string(), Style::default().fg(TEXT)),
+                        Span::styled(format!("  {}", image.url), Style::default().fg(MUTED)),
+                    ]));
+                }
+            }
+            continue;
+        }
+        let is_match = match_line == Some(index);
+        rendered.push(if visual {
+            style_visual_line(source, is_match)
+        } else {
+            style_reader_line(source, is_match)
+        });
+    }
+    rendered
+}
+
+fn rendered_offset_for_source(page: &Page, width: u16, visual: bool, source_index: usize) -> usize {
+    let mut offset = 0usize;
+    for source in page.lines.iter().take(source_index) {
+        if let Some(raw_index) = source.strip_prefix(IMAGE_MARKER_PREFIX) {
+            let image_index = raw_index.parse::<usize>().unwrap_or(usize::MAX);
+            if visual {
+                if let Some(image) = page.images.get(image_index) {
+                    offset = offset.saturating_add(inline_image_height(image, width));
+                    continue;
+                }
+            }
+        }
+        offset = offset.saturating_add(1);
+    }
+    offset
+}
+
+fn inline_image_height(image: &PageImage, width: u16) -> usize {
+    if !image.is_ready() {
+        return 3;
+    }
+    let available = u32::from(width.saturating_sub(4).max(8));
+    let target_width = image.pixel_width.min(available).max(1);
+    let target_height = (image.pixel_height.saturating_mul(target_width) / image.pixel_width.max(1)).max(1);
+    2 + ((target_height + 1) / 2) as usize
+}
+
+fn render_inline_image(image: &PageImage, width: u16, out: &mut Vec<Line<'static>>) {
+    let alt = if image.alt.trim().is_empty() {
+        image.url.host_str().unwrap_or("image").to_string()
+    } else {
+        image.alt.clone()
+    };
+
+    if !image.is_ready() {
+        out.push(Line::from(vec![
+            Span::styled("╭─ IMAGE ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(alt.clone(), Style::default().fg(TEXT).add_modifier(Modifier::BOLD)),
+        ]));
+        let detail = image
+            .error
+            .as_deref()
+            .map(|error| format!("preview unavailable · {error}"))
+            .unwrap_or_else(|| "preview disabled".to_string());
+        out.push(Line::from(vec![
+            Span::styled("│  ", Style::default().fg(ACCENT_SOFT)),
+            Span::styled(detail, Style::default().fg(MUTED).add_modifier(Modifier::ITALIC)),
+        ]));
+        out.push(Line::from(vec![
+            Span::styled("╰─ ", Style::default().fg(ACCENT_SOFT)),
+            Span::styled(image.url.to_string(), Style::default().fg(MUTED)),
+        ]));
+        return;
+    }
+
+    let available = u32::from(width.saturating_sub(4).max(8));
+    let target_width = image.pixel_width.min(available).max(1);
+    let target_height = (image.pixel_height.saturating_mul(target_width) / image.pixel_width.max(1)).max(1);
+
+    out.push(Line::from(vec![
+        Span::styled("╭─ IMAGE ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(alt.clone(), Style::default().fg(TEXT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("  {}×{}", image.pixel_width, image.pixel_height),
+            Style::default().fg(MUTED),
+        ),
+    ]));
+
+    for target_y in (0..target_height).step_by(2) {
+        let mut spans = Vec::with_capacity(target_width as usize + 1);
+        spans.push(Span::styled("│ ", Style::default().fg(ACCENT_SOFT).bg(BG)));
+        for target_x in 0..target_width {
+            let source_x = target_x.saturating_mul(image.pixel_width) / target_width;
+            let top_y = target_y.saturating_mul(image.pixel_height) / target_height;
+            let bottom_target_y = (target_y + 1).min(target_height.saturating_sub(1));
+            let bottom_y = bottom_target_y.saturating_mul(image.pixel_height) / target_height;
+            let top = image_rgb_at(image, source_x, top_y);
+            let bottom = if target_y + 1 < target_height {
+                image_rgb_at(image, source_x, bottom_y)
+            } else {
+                (5, 8, 12)
+            };
+            spans.push(Span::styled(
+                "▀",
+                Style::default()
+                    .fg(Color::Rgb(top.0, top.1, top.2))
+                    .bg(Color::Rgb(bottom.0, bottom.1, bottom.2)),
+            ));
+        }
+        out.push(Line::from(spans));
+    }
+    out.push(Line::from(vec![
+        Span::styled("╰─ ", Style::default().fg(ACCENT_SOFT)),
+        Span::styled(
+            image.url.host_str().unwrap_or(image.url.as_str()).to_string(),
+            Style::default().fg(MUTED),
+        ),
+    ]));
+}
+
+fn image_rgb_at(image: &PageImage, x: u32, y: u32) -> (u8, u8, u8) {
+    let x = x.min(image.pixel_width.saturating_sub(1));
+    let y = y.min(image.pixel_height.saturating_sub(1));
+    let index = ((y * image.pixel_width + x) * 3) as usize;
+    if index + 2 >= image.rgb.len() {
+        return (5, 8, 12);
+    }
+    (image.rgb[index], image.rgb[index + 1], image.rgb[index + 2])
+}
+
+fn style_visual_line(line: &str, is_match: bool) -> Line<'static> {
+    let highlight = Color::Rgb(58, 52, 20);
+    let base_bg = if is_match { highlight } else { BG };
+    if let Some(text) = line.strip_prefix("# ") {
+        return Line::from(vec![
+            Span::styled("▌ ", Style::default().fg(ACCENT).bg(base_bg).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                text.to_string(),
+                Style::default().fg(Color::White).bg(base_bg).add_modifier(Modifier::BOLD),
+            ),
+        ]);
+    }
+    if let Some(text) = line.strip_prefix("## ") {
+        return Line::from(vec![
+            Span::styled("◆ ", Style::default().fg(ACCENT).bg(base_bg)),
+            Span::styled(
+                text.to_string(),
+                Style::default().fg(Color::Rgb(186, 230, 253)).bg(base_bg).add_modifier(Modifier::BOLD),
+            ),
+        ]);
+    }
+    if let Some(text) = line.strip_prefix("### ") {
+        return Line::from(vec![
+            Span::styled("› ", Style::default().fg(Color::Rgb(125, 211, 252)).bg(base_bg)),
+            Span::styled(
+                text.to_string(),
+                Style::default().fg(Color::Rgb(125, 211, 252)).bg(base_bg).add_modifier(Modifier::BOLD),
+            ),
+        ]);
+    }
+    if let Some(text) = line.strip_prefix("• ") {
+        return Line::from(vec![
+            Span::styled("  • ", Style::default().fg(ACCENT).bg(base_bg)),
+            Span::styled(text.to_string(), Style::default().fg(TEXT).bg(base_bg)),
+        ]);
+    }
+    if let Some(text) = line.strip_prefix("│ ") {
+        return Line::from(vec![
+            Span::styled("┃ ", Style::default().fg(ACCENT).bg(QUOTE_BG)),
+            Span::styled(
+                format!(" {text} "),
+                Style::default().fg(Color::Rgb(203, 213, 225)).bg(QUOTE_BG).add_modifier(Modifier::ITALIC),
+            ),
+        ]);
+    }
+    if let Some(text) = line.strip_prefix("◇ ") {
+        return Line::from(vec![
+            Span::styled("  ◇ ", Style::default().fg(ACCENT_SOFT).bg(base_bg)),
+            Span::styled(text.to_string(), Style::default().fg(MUTED).bg(base_bg).add_modifier(Modifier::ITALIC)),
+        ]);
+    }
+    if let Some(code) = line.strip_prefix("    ") {
+        return Line::from(vec![
+            Span::styled("  │ ", Style::default().fg(ACCENT_SOFT).bg(CODE_BG)),
+            Span::styled(
+                code.to_string(),
+                Style::default().fg(Color::Rgb(186, 230, 253)).bg(CODE_BG),
+            ),
+        ]);
+    }
+    if line.starts_with('│') && line.ends_with('│') {
+        return Line::from(Span::styled(
+            format!("  {line}"),
+            Style::default().fg(Color::Rgb(165, 243, 252)).bg(SURFACE),
+        ));
+    }
+    if line.is_empty() {
+        return Line::from(Span::styled(" ", Style::default().bg(BG)));
+    }
+    Line::from(Span::styled(
+        format!("  {line}"),
+        Style::default().fg(TEXT).bg(base_bg),
+    ))
 }
 
 fn style_reader_line(line: &str, is_match: bool) -> Line<'static> {
@@ -2172,11 +2799,26 @@ fn dump_page(raw: &str) -> Result<()> {
     let cookies = Arc::new(PersistentCookieStore::load(paths.cookies.clone()));
     let client = build_client(&config, Arc::clone(&cookies))?;
     let target = resolve_user_input(raw, &config)?;
-    let page = fetch_page(&client, target, config.reader_mode)?;
+    let page = fetch_page(&client, target, &config, config.reader_mode)?;
     println!("# {}", page.title);
     println!("{}", page.display_url);
     println!();
-    for line in page.lines { println!("{line}"); }
+    for line in &page.lines {
+        if line == HR_MARKER {
+            println!("{}", "-".repeat(60));
+            continue;
+        }
+        if let Some(raw_index) = line.strip_prefix(IMAGE_MARKER_PREFIX) {
+            if let Ok(index) = raw_index.parse::<usize>() {
+                if let Some(image) = page.images.get(index) {
+                    let label = if image.alt.is_empty() { "image" } else { &image.alt };
+                    println!("[IMG] {label} -> {}", image.url);
+                    continue;
+                }
+            }
+        }
+        println!("{line}");
+    }
     if !page.links.is_empty() {
         println!();
         println!("--- LINKS ({}) ---", page.links.len());
@@ -2216,6 +2858,14 @@ fn run_doctor() -> Result<()> {
     let config = match state::load_config(&paths) {
         Ok(config) => {
             println!("[OK] Config: {}", paths.config.display());
+            println!(
+                "[OK] Visual: {} · images {} · max {} · width {} · {} KB/image",
+                if config.visual_mode { "on" } else { "off" },
+                if config.load_images { "on" } else { "off" },
+                config.max_images,
+                config.image_width,
+                config.image_max_bytes / 1024
+            );
             config
         }
         Err(err) => {
@@ -2258,9 +2908,9 @@ fn run_doctor() -> Result<()> {
 
 fn print_cli_help() {
     println!(
-        "NOX {} — portable reader-first terminal browser\n\n\
+        "NOX {} — portable terminal-first browser with visual rendering\n\n\
          USAGE:\n  nox [URL | search query]\n  nox search <query>\n  nox --dump <URL | search query>\n  nox doctor\n  nox install\n  nox uninstall\n  nox update [--check]\n  nox config --path\n  nox data --path\n  nox cookies clear\n  nox --version\n\n\
-         TUI ESSENTIALS:\n  Ctrl+T/Ctrl+W   tabs\n  Ctrl+L          omnibox\n  s               web search\n  :               command palette\n  g               link hints\n  / · n/N         find · next/previous\n  m / M           toggle bookmark / bookmarks\n  H               history\n  F               forms\n  R               reader mode\n  Tab             links\n\n\
+         TUI ESSENTIALS:\n  Ctrl+T/Ctrl+W   tabs\n  Ctrl+L          omnibox\n  s               web search\n  :               command palette\n  g               link hints\n  / · n/N         find · next/previous\n  m / M           toggle bookmark / bookmarks\n  H               history\n  F               forms\n  R               reader mode\n  V               visual mode / image previews\n  Tab             links\n\n\
          SEARCH:\n  ? query         force configured web search\n  !ddg query      DuckDuckGo\n  !g query        Google\n  !gh query       GitHub\n  !w query        Wikipedia\n\n\
          EXAMPLES:\n  nox example.com\n  nox search rust ratatui\n  nox "!gh ratatui"\n  nox --dump https://example.com\n  nox doctor\n  nox update --check",
         env!("CARGO_PKG_VERSION")
@@ -2381,6 +3031,7 @@ mod tests {
             200,
             "<html><body><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table></body></html>",
             false,
+            8,
         );
         assert!(page.lines.iter().any(|line| line.contains("A") && line.contains("B")));
     }
@@ -2392,9 +3043,25 @@ mod tests {
             200,
             "<html><body><form action='/q'><input name='q' placeholder='Search'><button type='submit'>Go</button></form></body></html>",
             true,
+            8,
         );
         assert_eq!(page.forms.len(), 1);
         assert_eq!(page.forms[0].fields.len(), 2);
+    }
+
+
+    #[test]
+    fn images_are_extracted_into_visual_markers() {
+        let page = parse_html_page(
+            Url::parse("https://example.com/article").unwrap(),
+            200,
+            "<html><body><h1>Hello</h1><img src='/hero.png' alt='Hero image'></body></html>",
+            false,
+            8,
+        );
+        assert_eq!(page.images.len(), 1);
+        assert_eq!(page.images[0].url.as_str(), "https://example.com/hero.png");
+        assert!(page.lines.iter().any(|line| line.starts_with(IMAGE_MARKER_PREFIX)));
     }
 
     #[test]

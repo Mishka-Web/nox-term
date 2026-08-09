@@ -17,6 +17,11 @@ pub struct AppConfig {
     pub max_history: usize,
     pub user_agent: String,
     pub download_dir: Option<String>,
+    pub visual_mode: bool,
+    pub load_images: bool,
+    pub max_images: usize,
+    pub image_width: u32,
+    pub image_max_bytes: usize,
 }
 
 impl Default for AppConfig {
@@ -29,6 +34,11 @@ impl Default for AppConfig {
             max_history: 1_000,
             user_agent: format!("NOX/{} terminal-browser", env!("CARGO_PKG_VERSION")),
             download_dir: None,
+            visual_mode: true,
+            load_images: true,
+            max_images: 8,
+            image_width: 48,
+            image_max_bytes: 2_000_000,
         }
     }
 }
@@ -99,10 +109,25 @@ pub fn load_config(paths: &Paths) -> Result<AppConfig> {
     let mut config = toml::from_str::<AppConfig>(&raw)
         .with_context(|| format!("ошибка в {}", paths.config.display()))?;
 
+    let mut changed = false;
+
     // NOX 0.5 migrated the built-in DuckDuckGo provider to the Lite UI.
     // Preserve custom search engines, but upgrade the exact old default automatically.
     if config.search_engine == "https://html.duckduckgo.com/html/?q={query}" {
         config.search_engine = "https://lite.duckduckgo.com/lite/?q={query}".to_string();
+        changed = true;
+    }
+
+    // NOX 0.6 added Visual Mode settings. Serde fills missing fields from Default;
+    // write them back once so existing users can discover and tune them in config.toml.
+    for key in ["visual_mode", "load_images", "max_images", "image_width", "image_max_bytes"] {
+        if !raw.lines().any(|line| line.trim_start().starts_with(&format!("{key} ="))) {
+            changed = true;
+            break;
+        }
+    }
+
+    if changed {
         save_config(paths, &config)?;
     }
 
