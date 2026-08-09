@@ -1,0 +1,58 @@
+# Rust build artifacts
+/target/
+
+# Portable / release artifacts
+/dist/
+/release/
+/artifacts/
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.bak
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE / editors
+.idea/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Rust tooling
+.rustc_info.json
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Local NOX runtime data (if ever created inside the repo)
+/config.toml
+/bookmarks.json
+/history.json
+/session.json
+/cookies.json
+/downloads/
+
+# Coverage / profiling
+coverage/
+*.profraw
+*.profdata
+
+# Packaging leftovers
+*.zip
+*.tar
+*.tar.gz
+
+# Do NOT ignore Cargo.lock for an application/binary project.
+# Cargo.lock should be committed.
