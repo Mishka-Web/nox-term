@@ -1,31 +1,23 @@
-# NOX Browser 0.4.1
+# NOX Browser 0.5.0
 
-**NOX** — минималистичный portable terminal browser на Rust: reader-first, keyboard-first, без Chromium и без обязательных runtime-зависимостей у конечного пользователя.
+**NOX** — минималистичный terminal-first браузер на Rust: keyboard-first, portable, без Chromium и без обязательных runtime-зависимостей у конечного пользователя.
 
-NOX 0.4 переводит проект из простого HTML-reader в полноценный терминальный браузер с вкладками, состоянием между запусками, формами, cookies и загрузками.
+NOX ориентирован на чтение документации и статей, SSH/VPS, быстрый веб-поиск, работу со ссылками, HTML-формами, JSON и developer workflows.
 
-## Установка команды `nox`
+## Установка
 
-После установки NOX запускается из любой директории просто как обычная CLI-команда:
+### Windows
+
+```powershell
+irm https://raw.githubusercontent.com/Mishka-Web/nox-term/main/install.ps1 | iex
+```
+
+После установки:
 
 ```powershell
 nox
 nox github.com
 nox --version
-```
-
-### Windows — локальная разработка
-
-```powershell
-.\scripts\dev-install.ps1
-```
-
-Скрипт соберёт release-бинарник, установит его в `%LOCALAPPDATA%\Programs\NOX` и автоматически добавит этот каталог в пользовательский `PATH`.
-
-### Windows — GitHub Release
-
-```powershell
-irm https://raw.githubusercontent.com/Mishka-Web/nox-term/main/install.ps1 | iex
 ```
 
 ### Linux / macOS
@@ -34,183 +26,224 @@ irm https://raw.githubusercontent.com/Mishka-Web/nox-term/main/install.ps1 | iex
 curl -fsSL https://github.com/Mishka-Web/nox-term/releases/latest/download/install.sh | sh
 ```
 
-Если portable-бинарник уже скачан вручную:
+Если portable-бинарник уже скачан:
 
 ```bash
 nox install
 ```
 
-На Windows из каталога загрузки:
+На Windows:
 
 ```powershell
 .\nox.exe install
 ```
 
-Подробности: [INSTALL.md](INSTALL.md).
+Подробнее: [INSTALL.md](INSTALL.md). Перед релизом: [TESTING.md](TESTING.md).
 
+## Что нового в 0.5
 
-## Что появилось в 0.4
+### Omnibox и веб-поиск
 
-- вкладки: `Ctrl+T`, `Ctrl+W`, `Ctrl+Tab`, `Alt+1..9`;
-- отдельная Back/Forward history внутри каждой вкладки;
-- глобальная история посещений (`H`);
-- persistent bookmarks (`m`, `M`);
-- восстановление вкладок после перезапуска;
+`Ctrl+L` или `o` открывает omnibox. Для мгновенного веб-поиска нажмите `s`. Он понимает URL и обычный поисковый запрос.
+
+```text
+github.com
+rust terminal browser
+? rust ratatui
+!gh ratatui
+!w Rust
+!g rust terminal browser
+!ddg terminal browser
+```
+
+Доступные shortcuts:
+
+| Shortcut | Поиск |
+|---|---|
+| `? query` | поисковик из `config.toml` |
+| `!ddg query` / `!d query` | DuckDuckGo Lite |
+| `!g query` | Google |
+| `!gh query` | GitHub |
+| `!w query` | Wikipedia |
+
+Из CLI можно явно запустить поиск:
+
+```bash
+nox search rust ratatui
+```
+
+### Command Palette
+
+Нажмите:
+
+```text
+:
+```
+
+Доступны команды с фильтрацией по мере ввода:
+
+```text
+open
+search
+find
+hints
+links
+new-tab
+close-tab
+reload
+back
+forward
+reader
+bookmarks
+history
+forms
+home
+help
+quit
+```
+
+Используйте `↑/↓` и `Enter`.
+
+### Link Hints
+
+Нажмите:
+
+```text
+g
+```
+
+NOX покажет пронумерованные ссылки. Введите номер и нажмите `Enter`.
+
+Это быстрый keyboard-first способ открыть ссылку без перехода в отдельную панель Links.
+
+### Улучшенный поиск по странице
+
+```text
+/     новый поиск
+n     следующее совпадение
+N     предыдущее совпадение
+```
+
+Статус показывает позицию:
+
+```text
+«rust» · 2/7 · n/N следующее/предыдущее
+```
+
+### NOX Doctor
+
+Диагностика установки и окружения:
+
+```bash
+nox doctor
+```
+
+Проверяются:
+
+- TTY;
+- каталог пользовательских данных;
 - `config.toml`;
-- cookies между запросами и persistent cookies для долгоживущих cookie-записей;
-- Reader mode toggle (`R`);
+- каталог Downloads;
+- cookie store;
+- HTTP/HTTPS-клиент;
+- доступ к `https://example.com`;
+- путь текущего executable.
+
+## Возможности браузера
+
+- HTTP / HTTPS;
+- несколько вкладок;
+- Back / Forward history для каждой вкладки;
+- глобальная история;
+- persistent bookmarks;
+- восстановление сессии;
+- cookies;
+- Reader Mode;
 - HTML tables;
-- basic HTML forms: text/password/textarea/checkbox/radio/select/submit;
-- GET и POST `application/x-www-form-urlencoded` forms;
-- downloads из панели Links (`d`);
+- basic HTML forms;
+- GET / POST forms;
+- downloads;
 - JSON pretty-view;
-- прежние `--dump`, self-update и portable release pipeline сохранены.
+- `--dump` для stdout/pipes;
+- self-update;
+- portable releases Windows/Linux/macOS x64/ARM64.
 
-> NOX не исполняет JavaScript и не строит CSS layout. Это сознательная архитектура: быстрый текстовый браузер для терминала, SSH и developer workflows.
-
-## Быстрый запуск для разработчика
-
-```bash
-cargo run
-```
-
-Или сразу открыть страницу:
-
-```bash
-cargo run -- github.com
-```
-
-Release build:
-
-```bash
-cargo build --release
-```
+> NOX намеренно не исполняет полноценный JavaScript runtime и не строит CSS layout. Это terminal-first браузер, а не Chromium в терминале.
 
 ## Основные клавиши
 
 | Клавиша | Действие |
 |---|---|
-| `Ctrl+L` / `o` | URL или поисковый запрос |
+| `Ctrl+L` / `o` | omnibox: URL или поиск |
+| `s` | быстрый веб-поиск |
+| `:` | Command Palette |
+| `g` | Link Hints |
+| `/` | поиск по странице |
+| `n` / `N` | следующее / предыдущее совпадение |
 | `Ctrl+T` | новая вкладка |
 | `Ctrl+W` | закрыть вкладку |
 | `Ctrl+Tab` | следующая вкладка |
 | `Alt+1..9` | перейти на вкладку |
-| `Tab` / `l` | ссылки |
-| `Enter` | открыть выбранную ссылку |
-| `d` в Links | скачать выбранную ссылку |
-| `/` | поиск по странице |
-| `n` | следующее совпадение |
+| `Tab` / `l` | панель Links |
+| `Enter` в Links | открыть ссылку |
+| `t` в Links | открыть ссылку в новой вкладке |
+| `d` в Links | скачать ссылку |
 | `b` / `f` | назад / вперёд |
 | `r` | reload |
-| `R` | Reader mode on/off |
-| `m` | добавить/удалить текущую страницу из bookmarks |
-| `M` | открыть bookmarks |
-| `H` | открыть глобальную history |
-| `F` | формы страницы |
-| `j/k`, arrows | навигация/scroll |
+| `R` | Reader Mode |
+| `m` / `M` | bookmark / список bookmarks |
+| `H` | история |
+| `F` | формы |
+| `j/k`, arrows | навигация / scroll |
 | `?` | help |
-| `q` | exit |
+| `q` / `Ctrl+C` | exit |
 
-## Формы
+## CLI
 
-На странице с `<form>` нажмите `F`.
-
-NOX умеет:
-
-- text input;
-- password input;
-- textarea;
-- checkbox;
-- radio;
-- select;
-- submit;
-- GET forms;
-- POST `application/x-www-form-urlencoded` forms.
-
-В панели Forms:
-
-```text
-j/k      выбрать поле
-Enter    редактировать поле / submit
-Space    checkbox, radio или следующий select option
-Esc      закрыть
-```
-
-Это не JavaScript form runtime: client-side JS validation и JS-generated forms не исполняются.
-
-## Downloads
-
-Откройте Links (`Tab`), выберите ссылку и нажмите:
-
-```text
-d
-```
-
-По умолчанию файл попадёт в пользовательский `Downloads`.
-
-Каталог можно переопределить:
-
-```toml
-download_dir = "D:/Downloads/NOX"
-```
-
-или переменной окружения:
-
-```text
-NOX_DOWNLOAD_DIR
+```bash
+nox
+nox example.com
+nox rust terminal browser
+nox search rust ratatui
+nox --dump example.com
+nox doctor
+nox config --path
+nox data --path
+nox cookies clear
+nox update --check
+nox update
+nox --version
 ```
 
 ## Config
 
-Узнать путь:
+Путь:
 
 ```bash
 nox config --path
 ```
 
-Пример `config.toml`:
+Пример:
 
 ```toml
 homepage = "about:home"
-search_engine = "https://html.duckduckgo.com/html/?q={query}"
+search_engine = "https://lite.duckduckgo.com/lite/?q={query}"
 restore_session = true
 reader_mode = true
 max_history = 1000
-user_agent = "NOX/0.4 terminal-browser"
+user_agent = "NOX/0.5 terminal-browser"
 # download_dir = "D:/Downloads/NOX"
 ```
 
-`{query}` обязателен для кастомного search engine. Если его нет, NOX использует DuckDuckGo HTML fallback.
+`{query}` — место для URL-encoded поискового запроса. При обновлении со старого встроенного DuckDuckGo HTML-шаблона NOX автоматически мигрирует его на Lite; пользовательские поисковики не меняются.
 
-## Где хранятся данные
-
-Путь можно узнать:
+## Данные пользователя
 
 ```bash
 nox data --path
 ```
 
-Обычно:
-
-### Windows
-
-```text
-%LOCALAPPDATA%\NOX\
-```
-
-### Linux
-
-```text
-~/.config/nox/
-```
-
-### macOS
-
-```text
-~/Library/Application Support/NOX/
-```
-
-В каталоге находятся:
+NOX хранит данные отдельно от бинарника:
 
 ```text
 config.toml
@@ -220,67 +253,51 @@ session.json
 cookies.json
 ```
 
-Для полностью изолированного экземпляра можно задать:
-
-```text
-NOX_DATA_DIR=/custom/path
-```
-
-## Cookies
-
-NOX передаёт cookies между запросами и сохраняет persistent cookie-записи в `cookies.json`.
-
-Очистить:
+## Сборка из исходников
 
 ```bash
-nox cookies clear
+cargo check
+cargo test
+cargo clippy
+cargo run
 ```
 
-Реализация 0.4 ориентирована на обычные RFC6265-style Domain/Path/Secure cookies. Полная browser-grade cookie policy (SameSite policy engine, Public Suffix enforcement и детальное expiration handling) остаётся задачей следующего security hardening этапа.
-
-## Dump mode
+Сразу открыть сайт:
 
 ```bash
-nox --dump example.com
+cargo run -- example.com
 ```
+
+Release build:
 
 ```bash
-nox --dump example.com | less
+cargo build --release
 ```
 
-Если stdout не является TTY, NOX автоматически работает как текстовая CLI-утилита.
+## Release
 
-## Self-update
+Перед тегом версия в `Cargo.toml` должна совпадать с тегом.
 
 ```bash
-nox update --check
-nox update
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
-Официальный release binary получает адрес `owner/repo` во время GitHub Actions build и проверяет SHA-256 перед заменой бинарника.
+GitHub Actions собирает portable assets для Windows, Linux и macOS, x64/ARM64.
 
-## Portable distribution
+## Roadmap
 
-После публикации тега:
+Следующее крупное направление — **Developer Tools**:
 
-```bash
-git tag v0.4.0
-git push origin v0.4.0
-```
+- Network Inspector;
+- request/response headers;
+- View Source;
+- cookie viewer;
+- JSON tree;
+- API mode;
+- HTTP methods/body/headers;
+- proxy / SOCKS5.
 
-GitHub Actions собирает release assets для Windows, Linux и macOS, x64/ARM64.
+## License
 
-Подробнее: [PORTABLE.md](PORTABLE.md).
-
-## Архитектурная цель
-
-NOX не пытается заменить Chrome визуально. Направление проекта:
-
-```text
-terminal browser
-+ reader
-+ curl/HTTPie ergonomics
-+ lightweight DevTools
-```
-
-Следующий логичный релиз — developer tooling: network inspector, headers, cookies viewer, source mode, proxy/SOCKS5 и API mode.
+MIT.

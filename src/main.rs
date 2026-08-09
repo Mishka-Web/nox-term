@@ -129,12 +129,62 @@ enum Mode {
     Address,
     Search,
     Links,
+    Hints,
+    Command,
     Bookmarks,
     History,
     Forms,
     FormInput { form: usize, field: usize },
     Help,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommandAction {
+    Open,
+    WebSearch,
+    Find,
+    LinkHints,
+    Links,
+    NewTab,
+    CloseTab,
+    Reload,
+    Back,
+    Forward,
+    Reader,
+    Bookmarks,
+    History,
+    Forms,
+    Home,
+    Help,
+    Quit,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PaletteCommand {
+    name: &'static str,
+    description: &'static str,
+    action: CommandAction,
+}
+
+const PALETTE_COMMANDS: &[PaletteCommand] = &[
+    PaletteCommand { name: "open", description: "открыть URL или запрос", action: CommandAction::Open },
+    PaletteCommand { name: "search", description: "веб-поиск через search_engine", action: CommandAction::WebSearch },
+    PaletteCommand { name: "find", description: "поиск по текущей странице", action: CommandAction::Find },
+    PaletteCommand { name: "hints", description: "быстрый переход по ссылке по номеру", action: CommandAction::LinkHints },
+    PaletteCommand { name: "links", description: "список ссылок текущей страницы", action: CommandAction::Links },
+    PaletteCommand { name: "new-tab", description: "создать новую вкладку", action: CommandAction::NewTab },
+    PaletteCommand { name: "close-tab", description: "закрыть текущую вкладку", action: CommandAction::CloseTab },
+    PaletteCommand { name: "reload", description: "перезагрузить страницу", action: CommandAction::Reload },
+    PaletteCommand { name: "back", description: "назад", action: CommandAction::Back },
+    PaletteCommand { name: "forward", description: "вперёд", action: CommandAction::Forward },
+    PaletteCommand { name: "reader", description: "переключить Reader Mode", action: CommandAction::Reader },
+    PaletteCommand { name: "bookmarks", description: "открыть закладки", action: CommandAction::Bookmarks },
+    PaletteCommand { name: "history", description: "открыть историю", action: CommandAction::History },
+    PaletteCommand { name: "forms", description: "открыть формы страницы", action: CommandAction::Forms },
+    PaletteCommand { name: "home", description: "открыть домашнюю страницу NOX", action: CommandAction::Home },
+    PaletteCommand { name: "help", description: "показать клавиши и возможности", action: CommandAction::Help },
+    PaletteCommand { name: "quit", description: "выйти из NOX", action: CommandAction::Quit },
+];
 
 struct App {
     client: Client,
@@ -156,6 +206,8 @@ struct App {
     bookmark_state: ListState,
     history_state: ListState,
     form_state: ListState,
+    command_state: ListState,
+    hint_input: String,
     status: String,
 }
 
@@ -186,6 +238,8 @@ impl App {
             bookmark_state: ListState::default(),
             history_state: ListState::default(),
             form_state: ListState::default(),
+            command_state: ListState::default(),
+            hint_input: String::new(),
             status: "Готово".to_string(),
         };
 
@@ -450,7 +504,100 @@ impl App {
         self.mode = Mode::Search;
         self.input.clear();
         self.input_cursor = 0;
-        self.status = "Поиск по текущей странице".to_string();
+        self.status = "Поиск по текущей странице · n/N следующее/предыдущее".to_string();
+    }
+
+    fn open_web_search(&mut self) {
+        self.mode = Mode::Address;
+        self.input = "? ".to_string();
+        self.input_cursor = self.input.chars().count();
+        self.status = "Веб-поиск · введите запрос и нажмите Enter".to_string();
+    }
+
+    fn open_command_palette(&mut self) {
+        self.mode = Mode::Command;
+        self.input.clear();
+        self.input_cursor = 0;
+        self.command_state.select(Some(0));
+        self.status = "Command palette · вводите команду или выберите стрелками".to_string();
+    }
+
+    fn open_link_hints(&mut self) {
+        if self.current_page().links.is_empty() {
+            self.status = "На странице нет ссылок".to_string();
+            return;
+        }
+        self.mode = Mode::Hints;
+        self.hint_input.clear();
+        self.status = "Link hints · введите номер ссылки и Enter".to_string();
+    }
+
+    fn filtered_command_indices(&self) -> Vec<usize> {
+        let query = self.input.trim().to_lowercase();
+        PALETTE_COMMANDS
+            .iter()
+            .enumerate()
+            .filter(|(_, command)| {
+                query.is_empty()
+                    || command.name.contains(&query)
+                    || command.description.to_lowercase().contains(&query)
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    fn execute_palette_command(&mut self) {
+        let filtered = self.filtered_command_indices();
+        let selected = self.command_state.selected().unwrap_or(0);
+        let Some(command_index) = filtered.get(selected).copied() else {
+            self.status = "Команда не найдена".to_string();
+            return;
+        };
+        let action = PALETTE_COMMANDS[command_index].action;
+        self.mode = Mode::Normal;
+        self.input.clear();
+        self.input_cursor = 0;
+        match action {
+            CommandAction::Open => {
+                self.mode = Mode::Address;
+                self.input.clear();
+                self.input_cursor = 0;
+                self.status = "Введите URL или поисковый запрос".to_string();
+            }
+            CommandAction::WebSearch => self.open_web_search(),
+            CommandAction::Find => self.open_search(),
+            CommandAction::LinkHints => self.open_link_hints(),
+            CommandAction::Links => self.toggle_links(),
+            CommandAction::NewTab => self.new_tab(),
+            CommandAction::CloseTab => self.close_tab(),
+            CommandAction::Reload => self.reload(),
+            CommandAction::Back => self.go_back(),
+            CommandAction::Forward => self.go_forward(),
+            CommandAction::Reader => self.toggle_reader_mode(),
+            CommandAction::Bookmarks => self.open_bookmarks(),
+            CommandAction::History => self.open_history_panel(),
+            CommandAction::Forms => self.open_forms(),
+            CommandAction::Home => self.install_page(home_page(), true, false),
+            CommandAction::Help => self.mode = Mode::Help,
+            CommandAction::Quit => self.running = false,
+        }
+    }
+
+    fn open_hint_target(&mut self) {
+        let Ok(number) = self.hint_input.trim().parse::<usize>() else {
+            self.status = "Введите номер ссылки".to_string();
+            return;
+        };
+        if number == 0 {
+            self.status = "Нумерация ссылок начинается с 1".to_string();
+            return;
+        }
+        let Some(target) = self.current_page().links.get(number - 1).map(|link| link.url.clone()) else {
+            self.status = format!("Ссылки #{number} нет на странице");
+            return;
+        };
+        self.hint_input.clear();
+        self.navigate_url(target, true);
     }
 
     fn toggle_links(&mut self) {
@@ -648,6 +795,13 @@ impl App {
         self.navigate_url(target, true);
     }
 
+    fn open_selected_link_new_tab(&mut self) {
+        let Some(index) = self.link_state.selected() else { return; };
+        let Some(target) = self.current_page().links.get(index).map(|link| link.url.clone()) else { return; };
+        self.new_tab();
+        self.navigate_url(target, true);
+    }
+
     fn open_selected_bookmark(&mut self) {
         let Some(index) = self.bookmark_state.selected() else { return; };
         let Some(url) = self.bookmarks.get(index).map(|item| item.url.clone()) else { return; };
@@ -699,38 +853,70 @@ impl App {
         self.find_next_from(start);
     }
 
-    fn find_next_from(&mut self, start: usize) {
+    fn find_previous(&mut self) {
+        if self.tab().search_query.is_empty() {
+            self.open_search();
+            return;
+        }
         let query = self.tab().search_query.to_lowercase();
-        let lines = &self.current_page().lines;
-        let found = lines
+        let matches: Vec<usize> = self
+            .current_page()
+            .lines
             .iter()
             .enumerate()
-            .skip(start)
-            .find(|(_, line)| line.to_lowercase().contains(&query))
+            .filter(|(_, line)| line.to_lowercase().contains(&query))
             .map(|(index, _)| index)
-            .or_else(|| {
-                lines
-                    .iter()
-                    .enumerate()
-                    .take(start.min(lines.len()))
-                    .find(|(_, line)| line.to_lowercase().contains(&query))
-                    .map(|(index, _)| index)
-            });
-
-        match found {
-            Some(index) => {
-                let query = self.tab().search_query.clone();
-                let tab = self.tab_mut();
-                tab.match_line = Some(index);
-                tab.scroll = index.min(u16::MAX as usize) as u16;
-                self.status = format!("Найдено: «{query}»");
-            }
-            None => {
-                let query = self.tab().search_query.clone();
-                self.tab_mut().match_line = None;
-                self.status = format!("«{query}» не найдено");
-            }
+            .collect();
+        if matches.is_empty() {
+            let original = self.tab().search_query.clone();
+            self.tab_mut().match_line = None;
+            self.status = format!("«{original}» не найдено");
+            return;
         }
+        let current = self.tab().match_line.unwrap_or(usize::MAX);
+        let index = matches
+            .iter()
+            .rev()
+            .copied()
+            .find(|candidate| *candidate < current)
+            .unwrap_or_else(|| *matches.last().unwrap_or(&0));
+        self.apply_search_match(index, &matches);
+    }
+
+    fn find_next_from(&mut self, start: usize) {
+        let query = self.tab().search_query.to_lowercase();
+        let matches: Vec<usize> = self
+            .current_page()
+            .lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.to_lowercase().contains(&query))
+            .map(|(index, _)| index)
+            .collect();
+
+        if matches.is_empty() {
+            let original = self.tab().search_query.clone();
+            self.tab_mut().match_line = None;
+            self.status = format!("«{original}» не найдено");
+            return;
+        }
+
+        let index = matches
+            .iter()
+            .copied()
+            .find(|candidate| *candidate >= start)
+            .unwrap_or(matches[0]);
+        self.apply_search_match(index, &matches);
+    }
+
+    fn apply_search_match(&mut self, index: usize, matches: &[usize]) {
+        let query = self.tab().search_query.clone();
+        let position = matches.iter().position(|candidate| *candidate == index).unwrap_or(0) + 1;
+        let total = matches.len();
+        let tab = self.tab_mut();
+        tab.match_line = Some(index);
+        tab.scroll = index.min(u16::MAX as usize) as u16;
+        self.status = format!("«{query}» · {position}/{total} · n/N следующее/предыдущее");
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
@@ -769,6 +955,8 @@ impl App {
         match self.mode {
             Mode::Address | Mode::Search | Mode::FormInput { .. } => self.handle_input_key(key),
             Mode::Links => self.handle_links_key(key),
+            Mode::Hints => self.handle_hints_key(key),
+            Mode::Command => self.handle_command_key(key),
             Mode::Bookmarks => self.handle_bookmarks_key(key),
             Mode::History => self.handle_history_key(key),
             Mode::Forms => self.handle_forms_key(key),
@@ -794,13 +982,17 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.running = false,
             KeyCode::Char('o') => self.open_address(),
+            KeyCode::Char('s') => self.open_web_search(),
             KeyCode::Char('/') => self.open_search(),
+            KeyCode::Char(':') => self.open_command_palette(),
+            KeyCode::Char('g') => self.open_link_hints(),
             KeyCode::Tab | KeyCode::Char('l') => self.toggle_links(),
             KeyCode::Char('b') | KeyCode::Char('[') => self.go_back(),
             KeyCode::Char('f') | KeyCode::Char(']') => self.go_forward(),
             KeyCode::Char('r') => self.reload(),
             KeyCode::Char('R') => self.toggle_reader_mode(),
             KeyCode::Char('n') => self.find_next(),
+            KeyCode::Char('N') => self.find_previous(),
             KeyCode::Char('m') => self.toggle_bookmark(),
             KeyCode::Char('M') => self.open_bookmarks(),
             KeyCode::Char('H') => self.open_history_panel(),
@@ -859,6 +1051,79 @@ impl App {
         }
     }
 
+    fn handle_hints_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.hint_input.clear();
+                self.status = "Link hints закрыты".to_string();
+            }
+            KeyCode::Char('g') if self.hint_input.is_empty() => {
+                self.mode = Mode::Normal;
+                self.status = "Link hints закрыты".to_string();
+            }
+            KeyCode::Enter => self.open_hint_target(),
+            KeyCode::Backspace => {
+                self.hint_input.pop();
+                self.status = if self.hint_input.is_empty() {
+                    "Link hints · введите номер ссылки и Enter".to_string()
+                } else {
+                    format!("Link hint: {}", self.hint_input)
+                };
+            }
+            KeyCode::Char(c @ '0'..='9') => {
+                if self.hint_input.len() < 4 {
+                    self.hint_input.push(c);
+                    self.status = format!("Link hint: {} · Enter открыть", self.hint_input);
+                }
+            }
+            KeyCode::Char('q') if self.hint_input.is_empty() => self.running = false,
+            _ => {}
+        }
+    }
+
+    fn handle_command_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.input.clear();
+                self.input_cursor = 0;
+                self.status = "Command palette закрыта".to_string();
+            }
+            KeyCode::Enter => self.execute_palette_command(),
+            KeyCode::Down => {
+                let len = self.filtered_command_indices().len();
+                Self::move_list(&mut self.command_state, len, 1);
+            }
+            KeyCode::Up => {
+                let len = self.filtered_command_indices().len();
+                Self::move_list(&mut self.command_state, len, -1);
+            }
+            KeyCode::Home => self.command_state.select(Some(0)),
+            KeyCode::End => {
+                let len = self.filtered_command_indices().len();
+                self.command_state.select(len.checked_sub(1));
+            }
+            KeyCode::Backspace => {
+                self.input_backspace();
+                self.command_state.select(Some(0));
+            }
+            KeyCode::Delete => {
+                self.input_delete();
+                self.command_state.select(Some(0));
+            }
+            KeyCode::Left => self.input_cursor = self.input_cursor.saturating_sub(1),
+            KeyCode::Right => self.input_cursor = (self.input_cursor + 1).min(self.input.chars().count()),
+            KeyCode::Char(c)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) => {
+                        self.input_insert(c);
+                        self.command_state.select(Some(0));
+                    }
+            _ => {}
+        }
+    }
+
     fn handle_links_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Tab | KeyCode::Char('l') => self.mode = Mode::Normal,
@@ -870,6 +1135,7 @@ impl App {
             KeyCode::Home => self.link_state.select(Some(0)),
             KeyCode::End => { let selected = self.current_page().links.len().checked_sub(1); self.link_state.select(selected); },
             KeyCode::Enter => self.open_selected_link(),
+            KeyCode::Char('t') => self.open_selected_link_new_tab(),
             KeyCode::Char('d') => self.download_selected_link(),
             KeyCode::Char('?') => self.mode = Mode::Help,
             _ => {}
@@ -984,6 +1250,8 @@ impl App {
 
         match self.mode {
             Mode::Help => self.draw_help(frame, area),
+            Mode::Command => self.draw_command_palette(frame, area),
+            Mode::Hints => self.draw_link_hints(frame, area),
             Mode::Bookmarks => self.draw_bookmarks(frame, area),
             Mode::History => self.draw_history(frame, area),
             Mode::Forms | Mode::FormInput { .. } => self.draw_forms(frame, area),
@@ -1032,10 +1300,10 @@ impl App {
         let active_input = matches!(self.mode, Mode::Address | Mode::Search | Mode::FormInput { .. });
         let border_color = if active_input { ACCENT } else { ACCENT_SOFT };
         let title = match self.mode {
-            Mode::Address => " ADDRESS · Enter открыть · Esc отмена ",
+            Mode::Address => " OMNIBOX · URL / запрос / !alias · Enter открыть ",
             Mode::Search => " FIND · Enter найти · Esc отмена ",
             Mode::FormInput { .. } => " FORM VALUE · Enter сохранить · Esc отмена ",
-            _ => " ADDRESS · Ctrl+L / o ",
+            _ => " OMNIBOX · Ctrl+L / o ",
         };
         let content = match self.mode {
             Mode::Address | Mode::FormInput { .. } => input_with_cursor(&self.input, self.input_cursor),
@@ -1110,7 +1378,7 @@ impl App {
             ]))
         }).collect();
         let block = Block::default()
-            .title(Span::styled(format!(" LINKS · {} · Enter open · d download ", items.len()), Style::default().fg(ACCENT)))
+            .title(Span::styled(format!(" LINKS · {} · Enter open · t new tab · d download ", items.len()), Style::default().fg(ACCENT)))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(ACCENT_SOFT))
@@ -1120,6 +1388,85 @@ impl App {
             .highlight_symbol("› ")
             .highlight_style(Style::default().fg(Color::White).bg(Color::Rgb(20, 67, 86)).add_modifier(Modifier::BOLD));
         frame.render_stateful_widget(list, area, &mut self.link_state);
+    }
+
+    fn draw_command_palette(&mut self, frame: &mut Frame, area: Rect) {
+        let popup = centered_rect(area, 82, 24);
+        frame.render_widget(Clear, popup);
+        let [input_area, list_area] = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(5)])
+            .areas(popup);
+
+        let input = Paragraph::new(format!(":{}", input_with_cursor(&self.input, self.input_cursor)))
+            .style(Style::default().fg(TEXT).bg(PANEL))
+            .block(
+                Block::default()
+                    .title(Span::styled(" COMMAND · ↑/↓ выбрать · Enter выполнить · Esc закрыть ", Style::default().fg(ACCENT)))
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(ACCENT))
+                    .style(Style::default().bg(PANEL)),
+            );
+        frame.render_widget(input, input_area);
+
+        let filtered = self.filtered_command_indices();
+        let items: Vec<ListItem<'_>> = filtered
+            .iter()
+            .map(|index| {
+                let command = PALETTE_COMMANDS[*index];
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{:<14}", command.name), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+                    Span::styled(command.description, Style::default().fg(TEXT)),
+                ]))
+            })
+            .collect();
+        if filtered.is_empty() {
+            self.command_state.select(None);
+        } else if self.command_state.selected().map_or(true, |index| index >= filtered.len()) {
+            self.command_state.select(Some(0));
+        }
+        let list = List::new(items)
+            .block(modal_block(" COMMANDS "))
+            .highlight_symbol("› ")
+            .highlight_style(Style::default().fg(Color::White).bg(Color::Rgb(20, 67, 86)).add_modifier(Modifier::BOLD));
+        frame.render_stateful_widget(list, list_area, &mut self.command_state);
+    }
+
+    fn draw_link_hints(&mut self, frame: &mut Frame, area: Rect) {
+        let popup = centered_rect(area, area.width.saturating_mul(4) / 5, area.height.saturating_mul(4) / 5);
+        frame.render_widget(Clear, popup);
+        let query = self.hint_input.clone();
+        let mut items = Vec::new();
+        for (index, link) in self.current_page().links.iter().enumerate() {
+            let number = (index + 1).to_string();
+            if !query.is_empty() && !number.starts_with(&query) {
+                continue;
+            }
+            let label = if link.label.trim().is_empty() {
+                link.url.host_str().unwrap_or(link.url.as_str()).to_string()
+            } else {
+                link.label.clone()
+            };
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(format!("[{:>2}] ", index + 1), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{}  ", label), Style::default().fg(TEXT)),
+                Span::styled(link.url.as_str().to_string(), Style::default().fg(MUTED)),
+            ])));
+        }
+        let title = if query.is_empty() {
+            format!(" LINK HINTS · {} links · type number + Enter ", self.current_page().links.len())
+        } else {
+            format!(" LINK HINTS · {}_ · Enter open · Backspace edit ", query)
+        };
+        let block = Block::default()
+            .title(Span::styled(title, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .style(Style::default().bg(PANEL));
+        let list = List::new(items).block(block);
+        frame.render_widget(list, popup);
     }
 
     fn draw_bookmarks(&mut self, frame: &mut Frame, area: Rect) {
@@ -1191,14 +1538,32 @@ impl App {
     fn draw_footer(&self, frame: &mut Frame, area: Rect) {
         let [left, right] = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(10), Constraint::Length(49)])
+            .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
             .areas(area);
         frame.render_widget(
             Paragraph::new(format!(" {}", self.status)).style(Style::default().fg(MUTED).bg(BG)),
             left,
         );
+        let max_scroll = self.max_scroll();
+        let progress = if max_scroll == 0 {
+            100
+        } else {
+            (u32::from(self.tab().scroll) * 100 / u32::from(max_scroll)).min(100)
+        };
+        let hints = match self.mode {
+            Mode::Normal => format!("{progress:>3}% · s search · g hints · : commands · / find · ? help"),
+            Mode::Address => "Enter open · ? query · !gh/!w/!g/!ddg · Esc".to_string(),
+            Mode::Search => "Enter find · n next · N previous · Esc".to_string(),
+            Mode::Links => "j/k select · Enter open · t new tab · d download · Esc".to_string(),
+            Mode::Hints => "digits hint · Enter open · Backspace · Esc".to_string(),
+            Mode::Command => "type filter · ↑/↓ select · Enter run · Esc".to_string(),
+            Mode::Bookmarks => "j/k select · Enter open · d delete · Esc".to_string(),
+            Mode::History => "j/k select · Enter open · d delete · D clear".to_string(),
+            Mode::Forms | Mode::FormInput { .. } => "j/k select · Enter edit/submit · Space toggle".to_string(),
+            Mode::Help => "Esc / ? / Enter close".to_string(),
+        };
         frame.render_widget(
-            Paragraph::new("Ctrl+T tab · m bookmark · M/H lists · R reader · ? ")
+            Paragraph::new(hints)
                 .alignment(Alignment::Right)
                 .style(Style::default().fg(MUTED).bg(BG)),
             right,
@@ -1206,38 +1571,47 @@ impl App {
     }
 
     fn draw_help(&self, frame: &mut Frame, area: Rect) {
-        let modal = centered_rect(area, 78, 31);
+        let modal = centered_rect(area, 84, 36);
         frame.render_widget(Clear, modal);
         let lines = vec![
             Line::from(""),
-            help_row("Ctrl+L / o", "адрес или веб-поиск"),
+            help_row("Ctrl+L / o", "omnibox: URL или веб-поиск"),
+            help_row("s", "быстрый веб-поиск"),
+            help_row(":", "command palette"),
+            help_row("g", "link hints: номер ссылки + Enter"),
+            help_row("Tab / l", "полный список ссылок"),
+            help_row("/", "поиск по текущей странице"),
+            help_row("n / N", "следующее / предыдущее совпадение"),
+            help_row("? запрос", "принудительный search_engine"),
+            help_row("!gh / !w", "поиск GitHub / Wikipedia"),
+            help_row("!g / !ddg", "поиск Google / DuckDuckGo"),
             help_row("Ctrl+T / Ctrl+W", "новая / закрыть вкладку"),
             help_row("Ctrl+Tab", "следующая вкладка"),
             help_row("Alt+1..9", "переключиться на вкладку"),
-            help_row("Tab / l", "ссылки"),
-            help_row("d (в Links)", "скачать выбранную ссылку"),
-            help_row("/ / n", "поиск / следующее совпадение"),
             help_row("b / f", "назад / вперёд"),
             help_row("r / R", "reload / Reader mode"),
-            help_row("m", "добавить/удалить закладку"),
-            help_row("M", "закладки"),
+            help_row("m / M", "bookmark / список закладок"),
             help_row("H", "общая история"),
             help_row("F", "формы текущей страницы"),
+            help_row("t / d (в Links)", "новая вкладка / скачать ссылку"),
             help_row("j/k · PgUp/PgDn", "прокрутка"),
-            help_row("?", "справка"),
             help_row("q / Ctrl+C", "выход"),
             Line::from(""),
             Line::from(Span::styled(
-                "NOX 0.4 хранит config, bookmarks, history, session и cookies между запусками.",
+                "NOX 0.5: omnibox, search aliases, command palette, link hints и улучшенный find.",
                 Style::default().fg(MUTED),
             )),
             Line::from(Span::styled(
-                "JavaScript/CSS layout по-прежнему не исполняются — NOX остаётся reader-first TUI.",
+                "CLI: nox doctor проверяет TTY, config, data, downloads, cookies и HTTPS.",
+                Style::default().fg(MUTED),
+            )),
+            Line::from(Span::styled(
+                "JavaScript/CSS layout не исполняются — NOX остаётся быстрым terminal-first браузером.",
                 Style::default().fg(MUTED),
             )),
         ];
         frame.render_widget(
-            Paragraph::new(lines).style(Style::default().fg(TEXT).bg(PANEL)).block(modal_block(" NOX 0.4 · KEYBOARD ")),
+            Paragraph::new(lines).style(Style::default().fg(TEXT).bg(PANEL)).block(modal_block(" NOX 0.5 · KEYBOARD ")),
             modal,
         );
     }
@@ -1620,6 +1994,28 @@ fn resolve_user_input(raw: &str, config: &AppConfig) -> Result<Url> {
     let raw = raw.trim();
     if raw.is_empty() { anyhow::bail!("пустой адрес"); }
     if raw == "about:home" { anyhow::bail!("about:home используется только внутри NOX"); }
+
+    let aliases = [
+        ("!ddg", "https://lite.duckduckgo.com/lite/?q={query}"),
+        ("!d", "https://lite.duckduckgo.com/lite/?q={query}"),
+        ("!g", "https://www.google.com/search?q={query}"),
+        ("!gh", "https://github.com/search?q={query}"),
+        ("!w", "https://ru.wikipedia.org/w/index.php?search={query}"),
+    ];
+    for (alias, template) in aliases {
+        if raw == alias || raw.starts_with(&format!("{alias} ")) {
+            let query = raw[alias.len()..].trim();
+            if query.is_empty() { anyhow::bail!("после {alias} нужен поисковый запрос"); }
+            return build_search_url(query, template);
+        }
+    }
+
+    if let Some(query) = raw.strip_prefix('?') {
+        let query = query.trim();
+        if query.is_empty() { anyhow::bail!("после ? нужен поисковый запрос"); }
+        return build_search_url(query, search_template(config));
+    }
+
     if let Ok(url) = Url::parse(raw) {
         if matches!(url.scheme(), "http" | "https") { return Ok(url); }
     }
@@ -1629,13 +2025,21 @@ fn resolve_user_input(raw: &str, config: &AppConfig) -> Result<Url> {
     let looks_like_host = !raw.chars().any(char::is_whitespace) && (raw.contains('.') || raw.contains(':'));
     if looks_like_host { return Url::parse(&format!("https://{raw}")).context("некорректный адрес"); }
 
-    let encoded = form_urlencoded::byte_serialize(raw.as_bytes()).collect::<String>();
-    let template = if config.search_engine.contains("{query}") {
-        config.search_engine.clone()
+    build_search_url(raw, search_template(config))
+}
+
+fn search_template(config: &AppConfig) -> &str {
+    if config.search_engine.contains("{query}") {
+        &config.search_engine
     } else {
-        "https://html.duckduckgo.com/html/?q={query}".to_string()
-    };
-    Url::parse(&template.replace("{query}", &encoded)).context("некорректный search_engine в config.toml")
+        "https://lite.duckduckgo.com/lite/?q={query}"
+    }
+}
+
+fn build_search_url(query: &str, template: &str) -> Result<Url> {
+    let encoded = form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>();
+    Url::parse(&template.replace("{query}", &encoded))
+        .context("некорректный шаблон поисковой системы")
 }
 
 fn home_page() -> Page {
@@ -1649,16 +2053,21 @@ fn home_page() -> Page {
         raw_html: None,
         reader_mode: true,
         lines: vec![
-            "# NOX 0.4".to_string(),
+            "# NOX 0.5".to_string(),
             String::new(),
-            "Portable reader-first terminal browser.".to_string(),
+            "Terminal-first web browser for navigation, reading and developer workflows.".to_string(),
             String::new(),
-            "Ctrl+L — адрес или поиск     Ctrl+T — новая вкладка".to_string(),
-            "Tab — ссылки                m / M — bookmark / bookmarks".to_string(),
-            "H — история                 F — формы".to_string(),
-            "R — Reader mode             ? — все клавиши".to_string(),
+            "Ctrl+L — omnibox             s — веб-поиск".to_string(),
+            ": — command palette           g — link hints".to_string(),
+            "/ — поиск по странице        n / N — next / previous".to_string(),
+            "Ctrl+T — новая вкладка       Tab — список ссылок".to_string(),
+            "m / M — bookmark / bookmarks H — история".to_string(),
+            "F — формы                    R — Reader mode".to_string(),
+            "? — все клавиши".to_string(),
             String::new(),
-            "Tabs. History. Bookmarks. Cookies. Forms. Downloads. Sessions.".to_string(),
+            "Search: обычный текст · ? forced search · !gh · !w · !g · !ddg".to_string(),
+            String::new(),
+            "CLI diagnostics: nox doctor".to_string(),
         ],
     }
 }
@@ -1780,12 +2189,80 @@ fn dump_page(raw: &str) -> Result<()> {
     Ok(())
 }
 
+fn run_doctor() -> Result<()> {
+    println!("NOX Doctor · {}", env!("CARGO_PKG_VERSION"));
+    println!();
+
+    let terminal_ok = io::stdin().is_terminal() && io::stdout().is_terminal();
+    println!("{} Terminal / TTY", if terminal_ok { "[OK]" } else { "[WARN]" });
+
+    let paths = match Paths::discover() {
+        Ok(paths) => {
+            println!("[OK] Data directory: {}", paths.root.display());
+            paths
+        }
+        Err(err) => {
+            println!("[FAIL] Data directory: {err:#}");
+            return Ok(());
+        }
+    };
+
+    if let Err(err) = paths.ensure() {
+        println!("[FAIL] Data directory writable: {err:#}");
+    } else {
+        println!("[OK] Data directory writable");
+    }
+
+    let config = match state::load_config(&paths) {
+        Ok(config) => {
+            println!("[OK] Config: {}", paths.config.display());
+            config
+        }
+        Err(err) => {
+            println!("[FAIL] Config: {err:#}");
+            return Ok(());
+        }
+    };
+
+    let download_dir = config
+        .download_dir
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| paths.downloads.clone());
+    match fs::create_dir_all(&download_dir) {
+        Ok(()) => println!("[OK] Downloads: {}", download_dir.display()),
+        Err(err) => println!("[FAIL] Downloads: {err}"),
+    }
+
+    let cookie_store = Arc::new(PersistentCookieStore::load(paths.cookies.clone()));
+    println!("[OK] Cookie store: {} cookies", cookie_store.count());
+
+    match build_client(&config, Arc::clone(&cookie_store)) {
+        Ok(client) => match client.get("https://example.com").send() {
+            Ok(response) => println!("[OK] HTTPS: example.com -> HTTP {}", response.status().as_u16()),
+            Err(err) => println!("[WARN] HTTPS test failed: {err}"),
+        },
+        Err(err) => println!("[FAIL] HTTP client: {err:#}"),
+    }
+
+    match env::current_exe() {
+        Ok(path) => println!("[OK] Executable: {}", path.display()),
+        Err(err) => println!("[WARN] Executable path: {err}"),
+    }
+
+    println!();
+    println!("Doctor finished.");
+    Ok(())
+}
+
 fn print_cli_help() {
     println!(
         "NOX {} — portable reader-first terminal browser\n\n\
-         USAGE:\n  nox [URL | search query]\n  nox --dump <URL | search query>\n  nox install\n  nox uninstall\n  nox update [--check]\n  nox config --path\n  nox data --path\n  nox cookies clear\n  nox --version\n\n\
-         TUI ESSENTIALS:\n  Ctrl+T/Ctrl+W   tabs\n  Ctrl+L          address/search\n  m / M           toggle bookmark / bookmarks\n  H               history\n  F               forms\n  R               reader mode\n  Tab             links\n\n\
-         EXAMPLES:\n  nox example.com\n  nox rust terminal browser\n  nox --dump https://example.com\n  nox install\n  nox update --check",
+         USAGE:\n  nox [URL | search query]\n  nox search <query>\n  nox --dump <URL | search query>\n  nox doctor\n  nox install\n  nox uninstall\n  nox update [--check]\n  nox config --path\n  nox data --path\n  nox cookies clear\n  nox --version\n\n\
+         TUI ESSENTIALS:\n  Ctrl+T/Ctrl+W   tabs\n  Ctrl+L          omnibox\n  s               web search\n  :               command palette\n  g               link hints\n  / · n/N         find · next/previous\n  m / M           toggle bookmark / bookmarks\n  H               history\n  F               forms\n  R               reader mode\n  Tab             links\n\n\
+         SEARCH:\n  ? query         force configured web search\n  !ddg query      DuckDuckGo\n  !g query        Google\n  !gh query       GitHub\n  !w query        Wikipedia\n\n\
+         EXAMPLES:\n  nox example.com\n  nox search rust ratatui\n  nox "!gh ratatui"\n  nox --dump https://example.com\n  nox doctor\n  nox update --check",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -1799,6 +2276,9 @@ fn main() -> Result<()> {
     if matches!(args.first().map(String::as_str), Some("--version" | "-V")) {
         println!("nox {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("doctor") {
+        return run_doctor();
     }
     if args.first().map(String::as_str) == Some("install") {
         return install::install_self();
@@ -1826,8 +2306,15 @@ fn main() -> Result<()> {
     }
 
     let explicit_dump = matches!(args.first().map(String::as_str), Some("--dump" | "-d"));
-    let value_args = if explicit_dump { &args[1..] } else { &args[..] };
-    let initial = (!value_args.is_empty()).then(|| value_args.join(" "));
+    let explicit_search = args.first().map(String::as_str) == Some("search");
+    let value_args = if explicit_dump || explicit_search { &args[1..] } else { &args[..] };
+    let initial = if value_args.is_empty() {
+        None
+    } else if explicit_search {
+        Some(format!("? {}", value_args.join(" ")))
+    } else {
+        Some(value_args.join(" "))
+    };
     let interactive_terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
     if explicit_dump || !interactive_terminal {
         let Some(value) = initial else { print_cli_help(); return Ok(()); };
@@ -1863,8 +2350,28 @@ mod tests {
     #[test]
     fn plain_text_becomes_search() {
         let url = resolve_user_input("rust terminal browser", &config()).unwrap();
-        assert_eq!(url.host_str(), Some("html.duckduckgo.com"));
+        assert_eq!(url.host_str(), Some("lite.duckduckgo.com"));
         assert!(url.query().unwrap_or_default().contains("rust+terminal+browser") || url.query().unwrap_or_default().contains("rust%20terminal%20browser"));
+    }
+
+    #[test]
+    fn question_mark_forces_configured_search() {
+        let url = resolve_user_input("? example.com docs", &config()).unwrap();
+        assert_eq!(url.host_str(), Some("lite.duckduckgo.com"));
+        assert!(url.as_str().contains("example.com"));
+    }
+
+    #[test]
+    fn github_search_alias_works() {
+        let url = resolve_user_input("!gh ratatui terminal", &config()).unwrap();
+        assert_eq!(url.host_str(), Some("github.com"));
+        assert_eq!(url.path(), "/search");
+    }
+
+    #[test]
+    fn wikipedia_search_alias_works() {
+        let url = resolve_user_input("!w Rust язык", &config()).unwrap();
+        assert_eq!(url.host_str(), Some("ru.wikipedia.org"));
     }
 
     #[test]

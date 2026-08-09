@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0
+
+- новый omnibox с явным `? query` и search aliases `!ddg`, `!g`, `!gh`, `!w`;
+- default search переведён на DuckDuckGo Lite non-JavaScript endpoint;
+- существующий конфиг со старым встроенным DuckDuckGo HTML endpoint автоматически мигрирует на Lite;
+- CLI-команда `nox search <query>`;
+- Command Palette по `:` с фильтрацией команд;
+- Link Hints по `g` для быстрого открытия пронумерованных ссылок;
+- `t` в Links открывает ссылку в новой вкладке;
+- поиск по странице теперь показывает `current/total`;
+- `N` ищет предыдущее совпадение, `n` — следующее;
+- контекстный footer и процент прокрутки;
+- новый `nox doctor` для диагностики TTY/config/data/downloads/cookies/HTTPS;
+- обновлены home/help экраны;
+- версия проекта поднята до 0.5.0.
+
 
 ## 0.4.2
 

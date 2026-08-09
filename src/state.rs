@@ -23,7 +23,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             homepage: "about:home".to_string(),
-            search_engine: "https://html.duckduckgo.com/html/?q={query}".to_string(),
+            search_engine: "https://lite.duckduckgo.com/lite/?q={query}".to_string(),
             restore_session: true,
             reader_mode: true,
             max_history: 1_000,
@@ -96,8 +96,16 @@ pub fn load_config(paths: &Paths) -> Result<AppConfig> {
 
     let raw = fs::read_to_string(&paths.config)
         .with_context(|| format!("не удалось прочитать {}", paths.config.display()))?;
-    let config = toml::from_str::<AppConfig>(&raw)
+    let mut config = toml::from_str::<AppConfig>(&raw)
         .with_context(|| format!("ошибка в {}", paths.config.display()))?;
+
+    // NOX 0.5 migrated the built-in DuckDuckGo provider to the Lite UI.
+    // Preserve custom search engines, but upgrade the exact old default automatically.
+    if config.search_engine == "https://html.duckduckgo.com/html/?q={query}" {
+        config.search_engine = "https://lite.duckduckgo.com/lite/?q={query}".to_string();
+        save_config(paths, &config)?;
+    }
+
     Ok(config)
 }
 

@@ -1,6 +1,6 @@
 # NOX Portable Distribution
 
-NOX 0.4 рассчитан на две модели использования:
+NOX 0.5 рассчитан на две модели использования:
 
 1. установка одной командой;
 2. запуск одиночного portable-бинарника без установки.
@@ -39,13 +39,13 @@ SHA256SUMS
 Windows:
 
 ```powershell
-irm https://github.com/OWNER/REPO/releases/latest/download/install.ps1 | iex
+irm https://raw.githubusercontent.com/Mishka-Web/nox-term/main/install.ps1 | iex
 ```
 
 Linux/macOS:
 
 ```bash
-curl -fsSL https://github.com/OWNER/REPO/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/Mishka-Web/nox-term/releases/latest/download/install.sh | sh
 ```
 
 ## Self-update
@@ -60,13 +60,13 @@ nox update
 Для локальной dev-сборки источник можно задать во время запуска:
 
 ```bash
-NOX_GITHUB_REPOSITORY="OWNER/REPO" nox update --check
+NOX_GITHUB_REPOSITORY="Mishka-Web/nox-term" nox update --check
 ```
 
 или во время сборки:
 
 ```bash
-NOX_GITHUB_REPOSITORY="OWNER/REPO" cargo build --release
+NOX_GITHUB_REPOSITORY="Mishka-Web/nox-term" cargo build --release
 ```
 
 ## Integrity
@@ -104,8 +104,8 @@ aarch64-unknown-linux-musl
 3. Создать совпадающий тег.
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
 Release workflow специально завершится ошибкой, если тег и Cargo version отличаются.
