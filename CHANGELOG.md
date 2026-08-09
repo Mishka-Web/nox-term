@@ -5,8 +5,9 @@
 
 - Исправлен однострочный установщик Windows PowerShell.
 - Добавлен корневой `install.ps1` bootstrap для `raw.githubusercontent.com`.
-- Bootstrap скачивает GitHub Release installer во временный файл, читает его как UTF-8 и выполняет в текущей PowerShell-сессии.
-- После установки команда `nox` доступна сразу в текущем PowerShell и сохраняется в пользовательском `PATH`.
+- Bootstrap скачивает GitHub Release installer во временный файл и запускает его отдельным PowerShell-процессом.
+- После установки bootstrap перечитывает User/Machine PATH, поэтому `nox` становится доступен в текущем PowerShell без перезапуска терминала.
+- Определение Windows-архитектуры в release installer больше не зависит только от `RuntimeInformation.OSArchitecture`.
 
 ## 0.4.1
 

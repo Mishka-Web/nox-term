@@ -1,4 +1,4 @@
-# NOX Browser 0.4.2
+# NOX Browser 0.4.1
 
 **NOX** — минималистичный portable terminal browser на Rust: reader-first, keyboard-first, без Chromium и без обязательных runtime-зависимостей у конечного пользователя.
 

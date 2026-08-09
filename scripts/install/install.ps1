@@ -8,10 +8,29 @@ function Fail([string]$Message) {
     throw "NOX install error: $Message"
 }
 
-$arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-switch ($arch) {
+$arch = $env:PROCESSOR_ARCHITEW6432
+if ([string]::IsNullOrWhiteSpace($arch)) {
+    $arch = $env:PROCESSOR_ARCHITECTURE
+}
+
+if ([string]::IsNullOrWhiteSpace($arch)) {
+    try {
+        $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+    }
+    catch {
+        $arch = $null
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($arch)) {
+    Fail "could not detect Windows architecture"
+}
+
+switch ($arch.ToUpperInvariant()) {
+    "AMD64" { $Asset = "nox-windows-x64.exe" }
     "X64"   { $Asset = "nox-windows-x64.exe" }
-    "Arm64" { $Asset = "nox-windows-arm64.exe" }
+    "ARM64" { $Asset = "nox-windows-arm64.exe" }
+    "AARCH64" { $Asset = "nox-windows-arm64.exe" }
     default { Fail "unsupported Windows architecture: $arch" }
 }
 
